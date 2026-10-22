@@ -5,20 +5,40 @@
 // and the cache hit rate. While Claude works a ⏳ chip shows the time, tool calls and running subagents.
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-// shortcut: assumes the 1-hour cache of a Claude subscription; read the TTL from the transcript if API-key sessions matter
-const CACHE_TTL_MS = 60 * 60_000
 const WINDOW_MS: Record<string, number> = { five_hour: 5 * 60 * 60_000, seven_day: 7 * 24 * 60 * 60_000 }
 const FAST_BELOW_MS = 2 * 60_000
 const KEEP_BELOW_MS = 10 * 60_000
 const CACHE_ALERT_MS = 5 * 60_000
-const ACTIONS_AT = 70 // percent of the compact line where the /compact and handoff buttons show
 const DELTAS = 5
 const TOP = 3
 const DAY_PREFIX = 'day:'
 const KEEP_DAYS = 7
-const HANDOFF =
-  '지금까지의 작업을 인계 메모로 정리해 줘. 저장소 임시 폴더 `.temp/<YYMMDD>_<task>/PROMPT_<작업 내용>.md`에 ' +
-  '배경, 관련 파일 경로, 목표, 검증 기준, 범위 밖 항목을 쓰고 경로를 알려 줘. 새 세션에서 이 파일로 이어서 작업할 거야.'
+
+// The userConfig options in plugin.json, asked at install and changed with /plugin configure or /config.
+export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string }
+const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '.temp' }
+let cfg = DEFAULTS
+
+// Options as saved, checked: a missing or odd value keeps its default.
+export function configure(o: Record<string, unknown>): Config {
+  const n = Number(o.actionsAt)
+  const dir = typeof o.handoffDir === 'string' ? o.handoffDir.trim().replace(/[\\/]+$/, '') : ''
+  cfg = {
+    cacheTtlMs: o.cacheTtl === '5m' ? 5 * 60_000 : DEFAULTS.cacheTtlMs,
+    actionsAt: Number.isFinite(n) && n >= 50 && n <= 95 ? n : DEFAULTS.actionsAt,
+    showCost: o.showCost !== false,
+    alerts: o.alerts !== false,
+    handoffDir: dir || DEFAULTS.handoffDir,
+  }
+  return cfg
+}
+
+export function handoffText(dir: string) {
+  return (
+    `지금까지의 작업을 인계 메모로 정리해 줘. 저장소의 \`${dir}/<YYMMDD>_<task>/PROMPT_<작업 내용>.md\`에 ` +
+    '배경, 관련 파일 경로, 목표, 검증 기준, 범위 밖 항목을 쓰고 경로를 알려 줘. 새 세션에서 이 파일로 이어서 작업할 거야.'
+  )
+}
 
 const C = {
   green: '#6CC88A',
@@ -85,7 +105,8 @@ let turnItems: Item[] = []
 let mine: Day = { usd: 0, input: 0, output: 0 } // this session's share of today
 const alerted = { fiveHour: '', ctx: false, cacheFor: 0 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  configure(options ?? {})
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     timer?.cancel()
@@ -195,7 +216,7 @@ export const register: Register = on => {
         $.command.run({ command: 'compact' }).catch(() => $.ui.toast('/compact를 실행하지 못했습니다'))
       },
       handoff: () => {
-        $.prompt.submit({ text: HANDOFF, asUser: true }).catch(() => $.ui.toast('Claude가 작업 중이라 보내지 못했습니다'))
+        $.prompt.submit({ text: handoffText(cfg.handoffDir), asUser: true }).catch(() => $.ui.toast('Claude가 작업 중이라 보내지 못했습니다'))
       },
       toggle: () => {
         showDetail = !showDetail
@@ -262,6 +283,7 @@ function isOld(key: string, now: number) {
 
 // One toast per crossing: 5h past 90% (per reset), context past 80% of the compact line, 5 minutes of cache left.
 function alert($: EngineInterface, now: number) {
+  if (!cfg.alerts) return
   const five = snap.limits.find(l => l.kind === 'five_hour')
   if (five && five.percentUsed >= 90 && alerted.fiveHour !== (five.resetsAt ?? '?')) {
     alerted.fiveHour = five.resetsAt ?? '?'
@@ -276,8 +298,8 @@ function alert($: EngineInterface, now: number) {
   }
   const at = snap.lastRequestAt
   if (at !== undefined && alerted.cacheFor !== at) {
-    const left = at + CACHE_TTL_MS - now
-    if (left > 0 && left <= CACHE_ALERT_MS) {
+    const left = at + cfg.cacheTtlMs - now
+    if (left > 0 && left <= Math.min(CACHE_ALERT_MS, cfg.cacheTtlMs / 2)) {
       alerted.cacheFor = at
       $.ui.toast(`캐시 ${Math.ceil(left / 60_000)}분 남음${hasKeepwarm ? ' · 자리를 비우면 유지 버튼' : ''}`)
     }
@@ -300,7 +322,7 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
   }
   const five = live('five_hour')
   const seven = live('seven_day')
-  const cost = s.costUsd ? `$${s.costUsd.toFixed(2)}` : undefined
+  const cost = cfg.showCost && s.costUsd ? `$${s.costUsd.toFixed(2)}` : undefined
   if (five || seven || cost) {
     v.plan = { color: seven ? levelColor(seven.w.percentUsed) : C.green, cost }
     if (five) {
@@ -329,7 +351,7 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
   }
   if (s.today && s.today.sessions > 0) {
     const t = s.today
-    v.detail.push({ label: '오늘', text: `$${t.usd.toFixed(2)} · 세션 ${t.sessions}개 · 입력 ${short(t.input)} / 출력 ${short(t.output)}` })
+    v.detail.push({ label: '오늘', text: `${cfg.showCost ? `$${t.usd.toFixed(2)} · ` : ''}세션 ${t.sessions}개 · 입력 ${short(t.input)} / 출력 ${short(t.output)}` })
   }
   const level = ctxLevel(s)
   if (level !== undefined && s.tokens !== undefined && s.window) {
@@ -345,7 +367,7 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
       bar: { percent: (s.tokens / s.window) * 100, color: f.color },
       delta: last ? (last > 0 ? `▲${short(last)}` : `▼${short(-last)}`) : undefined,
       turns: left === undefined ? undefined : `≈ ${left > 999 ? '999+' : left}턴`,
-      offerActions: level >= ACTIONS_AT,
+      offerActions: level >= cfg.actionsAt,
     }
     v.slices = slices(s.slices, s.window)
     if (s.compactsAt) {
@@ -357,7 +379,7 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
     v.detail.push({ label: '지난 턴', text: `큰 결과: ${s.top.map(i => `${i.label} ${short(i.tokens)}`).join(' · ')}` })
   }
   if (s.lastRequestAt !== undefined) {
-    const expires = s.lastRequestAt + CACHE_TTL_MS
+    const expires = s.lastRequestAt + cfg.cacheTtlMs
     const left = expires - now
     const rate = s.cache.total ? ` · 적중률 ${Math.round((s.cache.read / s.cache.total) * 100)}% · 재기록 ${s.cache.rewrites}회` : ''
     if (left <= 0) {
@@ -371,7 +393,7 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
         isCold: false,
         offerKeep: canKeep && left <= KEEP_BELOW_MS,
       }
-      v.detail.push({ label: '캐시', text: `만료 ${clock(expires)} · 1시간 캐시${rate}` })
+      v.detail.push({ label: '캐시', text: `만료 ${clock(expires)} · ${cfg.cacheTtlMs >= 60 * 60_000 ? '1시간' : '5분'} 캐시${rate}` })
     }
   }
   return v
@@ -630,7 +652,7 @@ function shouldRedraw(s: Snapshot, now: number) {
   const sec = Math.floor(now / 1000)
   if (sec % 60 === 0) return true
   if (s.lastRequestAt === undefined) return false
-  const left = s.lastRequestAt + CACHE_TTL_MS - now
+  const left = s.lastRequestAt + cfg.cacheTtlMs - now
   if (left <= -1000) return false // already drawn cold
   return left <= FAST_BELOW_MS || sec % 15 === 0
 }

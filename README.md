@@ -7,6 +7,12 @@ Claude Code 입력창 위에 **사용량 한도, 컨텍스트, 캐시 남은 시
 
 > 처음이라면 [토큰과 캐시, 초보자를 위한 정리](docs/TOKEN_TIPS.md)도 함께 읽어 보세요.
 
+**가장 쉬운 설치**: Claude Code에 이 문장을 그대로 보내세요. Claude가 버전 확인, 설정 질문, 설치까지 진행합니다.
+
+```text
+https://github.com/riam-park/token-gauge 를 내 클로드에 반영해줘.
+```
+
 ## 무엇을 보여 주나요
 
 입력창 바로 위에 칩 세 개가 붙습니다.
@@ -70,14 +76,22 @@ Claude Code 입력창(데스크톱 앱이나 터미널)에 한 줄씩 입력합�
 /plugin install token-gauge@token-gauge
 ```
 
+설치 중에 설정 창이 뜨면 [설정](#설치할-때-묻는-설정)을 고릅니다. 창이 뜨지 않으면 기본값으로 설치되고, 나중에 바꿀 수 있습니다.
 그다음 `/reload-plugins`를 입력하거나 새 세션을 엽니다. 메시지를 한 번 주고받으면 칩이 다 채워집니다.
-
-> 명령이 어렵다면 Claude에게 이렇게 부탁해도 됩니다.
-> "`claude plugin marketplace add https://github.com/riam-park/token-gauge.git` 실행하고, 이어서 `claude plugin install token-gauge@token-gauge` 실행해 줘. 둘 다 성공하면 /reload-plugins 하라고 알려 줘."
 
 ### 3. 자동 업데이트 켜기 (권장)
 
 `/plugin` → **Marketplaces** 탭 → **token-gauge** → **Enable auto-update**
+
+## 설치할 때 묻는 설정
+
+모두 기본값이 있어서 그냥 넘어가도 됩니다. 나중에 바꾸려면 `/plugin configure token-gauge@token-gauge`를 입력하거나 `/config`에서 찾습니다. 바꾼 값은 새 세션부터 적용됩니다.
+
+- `cacheTtl` **캐시 수명**: `1h`(기본, 구독 로그인) 또는 `5m`(API 키, Bedrock 같은 클라우드 제공자)
+- `actionsAt` **정리 버튼 기준(%)**: 컨텍스트가 compact 기준선의 몇 %일 때 `/compact`, 인계 메모 버튼을 보일지. 기본 70, 범위 50~95
+- `showCost` **비용 표시**: 세션 비용과 오늘 비용(달러)을 보일지. 기본 켬
+- `alerts` **알림**: 한도 90%, 컨텍스트 80%, 캐시 만료 임박 알림. 기본 켬
+- `handoffDir` **인계 메모 폴더**: 인계 메모 버튼이 메모를 쓰라고 할 저장소 안 폴더. 기본 `.temp`
 
 ## 선택: 캐시 유지 버튼 쓰기
 
@@ -118,7 +132,7 @@ Claude Code 입력창(데스크톱 앱이나 터미널)에 한 줄씩 입력합�
 5h, 7d 사용량은 API 응답에 실려 오는 값이라 세션의 첫 응답 전에는 없습니다. 메시지를 한 번 주고받으면 나타납니다.
 
 **캐시 시간이 정확한가요?**
-마지막 요청이 끝난 시점부터 1시간을 셉니다. 구독 플랜의 기본값(1시간 캐시) 기준입니다. API 키나 클라우드 제공자로 쓰면 기본 캐시가 5분이라 실제보다 길게 보입니다.
+마지막 요청이 끝난 시점부터 설정한 캐시 수명(기본 1시간)을 셉니다. API 키나 클라우드 제공자로 쓴다면 설정 `cacheTtl`을 `5m`으로 바꾸세요. 구독자도 한도를 넘어 추가 사용량(usage credits)으로 쓰는 동안에는 실제 캐시가 5분이 됩니다.
 
 **안전한가요?**
 mod는 내 권한으로 실행되는 코드입니다. token-gauge가 하는 일은 사용량 읽기, 화면 그리기, 이 mod 전용 저장소(오늘 합계)에 숫자 쓰기, 버튼을 눌렀을 때 명령 실행뿐입니다. 파일 쓰기와 네트워크 요청은 하지 않습니다. 설치 전에 직접 확인하려면 저장소를 내려받아 아래 명령을 실행해 보세요. 출력의 `hooks:`, `calls:` 줄에 하는 일이 모두 나옵니다.
@@ -126,6 +140,39 @@ mod는 내 권한으로 실행되는 코드입니다. token-gauge가 하는 일�
 ```bash
 claude plugin validate ./plugins/token-gauge
 ```
+
+## 테스트한 환경
+
+- **확인한 버전**: Claude Code **2.1.304**, Claude 데스크톱 앱 Code 탭, Windows 11 Pro, 구독 로그인(1시간 캐시)
+  - 칩, 상세 패널, 범주별 막대를 실제 화면으로 확인했습니다.
+  - `claude plugin validate`와 `claude plugin test`(10개)를 통과했습니다.
+  - 마켓플레이스 추가, 설치, 새 세션 로드를 확인했습니다.
+- **최소 버전**: 2.1.287 (mod 기능이 기본으로 켜지는 버전)
+- **아직 실제 화면으로 확인하지 않은 것**: 터미널 `claude` 화면, macOS와 Linux, 캐시 10분 이하일 때의 `유지 90분` 버튼, compact 기준선 70% 이상일 때의 버튼
+
+## Claude가 이 저장소를 설치할 때 따를 순서
+
+> 사용자가 이 저장소 링크와 함께 "내 클로드에 반영해줘", "설치해줘"라고 하면 Claude는 아래 순서를 따릅니다.
+
+1. **버전 확인**: 셸에서 `claude --version`을 실행합니다. 2.1.287 미만이면 사용자에게 알리고 `claude update`를 제안합니다. 데스크톱 앱이라면 사용자에게 `/status`의 **Claude Code** 버전을 물어봅니다.
+2. **설정 묻기**: [설치할 때 묻는 설정](#설치할-때-묻는-설정)의 다섯 항목을 기본값과 함께 사용자에게 한 번에 묻습니다. 질문 도구(AskUserQuestion)가 있으면 그것을 씁니다. 사용자가 "기본값"이라고 하면 그대로 갑니다. 구독 로그인이 아니라면 `cacheTtl`을 `5m`으로 권합니다.
+3. **마켓플레이스 추가**: 반드시 HTTPS 주소를 씁니다. `riam-park/token-gauge` 같은 짧은 형식은 SSH로 받으려다 known_hosts 오류로 실패할 수 있습니다.
+
+   ```bash
+   claude plugin marketplace add https://github.com/riam-park/token-gauge.git
+   ```
+
+4. **설치**: 셸의 `claude plugin install`은 설정 창을 띄우지 않으므로, 2단계에서 받은 값을 `--config`로 넘깁니다. 기본값과 같은 항목은 생략해도 됩니다.
+
+   ```bash
+   claude plugin install token-gauge@token-gauge --scope user --config cacheTtl=1h --config actionsAt=70 --config showCost=true --config alerts=true --config handoffDir=.temp
+   ```
+
+5. **확인**: `claude plugin list`에서 `token-gauge@token-gauge`가 `enabled`인지 봅니다.
+6. **선택 설치**: 사용자에게 cache-tax(캐시 유지 버튼용)도 설치할지 묻고, 원하면 [선택: 캐시 유지 버튼 쓰기](#선택-캐시-유지-버튼-쓰기)의 두 명령을 같은 방식(`claude plugin marketplace add ...`, `claude plugin install cache-tax@claude-code-mods --scope user`)으로 실행합니다. 마켓플레이스 이름이 겹친다는 오류가 나면 사용자에게 알리고 건너뜁니다.
+7. **마무리 안내**: 지금 세션에는 바로 보이지 않을 수 있으니 `/reload-plugins`를 입력하거나 새 세션을 열라고 알립니다. 첫 응답 뒤에 plan 칩이 채워진다는 것도 알립니다.
+
+주의: 사용자의 `settings.json`을 직접 편집하지 말고 위 명령만 씁니다. 다른 플러그인은 건드리지 않습니다.
 
 ## 개발
 

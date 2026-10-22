@@ -1,10 +1,46 @@
 {
   "name": "token-gauge",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Plan limits, context and the prompt-cache countdown as three color-coded chips above the prompt, with a detail panel and token-saving buttons.",
   "author": {
     "name": "yongmin.park",
     "url": "https://github.com/riam-park"
   },
-  "license": "MIT"
+  "repository": "https://github.com/riam-park/token-gauge",
+  "license": "MIT",
+  "userConfig": {
+    "cacheTtl": {
+      "type": "string",
+      "title": "캐시 수명",
+      "description": "구독(Pro, Max, Team, Enterprise) 로그인은 1h, API 키나 클라우드 제공자는 5m. 캐시 칩의 남은 시간 계산에 씁니다.",
+      "options": ["1h", "5m"],
+      "default": "1h"
+    },
+    "actionsAt": {
+      "type": "number",
+      "title": "정리 버튼 기준(%)",
+      "description": "컨텍스트가 자동 compact 기준선의 몇 %가 되면 /compact와 인계 메모 버튼을 보일지. 50~95.",
+      "min": 50,
+      "max": 95,
+      "default": 70
+    },
+    "showCost": {
+      "type": "boolean",
+      "title": "비용 표시",
+      "description": "세션 비용($)과 오늘 합계 비용을 보일지. 구독자에게는 정가 기준 추정값입니다.",
+      "default": true
+    },
+    "alerts": {
+      "type": "boolean",
+      "title": "알림",
+      "description": "5시간 한도 90%, 컨텍스트 80%, 캐시 만료 임박 때 알림을 띄울지.",
+      "default": true
+    },
+    "handoffDir": {
+      "type": "string",
+      "title": "인계 메모 폴더",
+      "description": "인계 메모 버튼이 Claude에게 메모를 쓰라고 요청할 저장소 안 폴더.",
+      "default": ".temp"
+    }
+  }
 }

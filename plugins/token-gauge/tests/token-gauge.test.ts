@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { fit, forecastText, hitRate, itemLabel, largest, pace, slices, sumDays, svgBar, text, turnsLeft, view } from '../hooks/register'
+import { configure, fit, forecastText, handoffText, hitRate, itemLabel, largest, pace, slices, sumDays, svgBar, text, turnsLeft, view } from '../hooks/register'
 import type { Snapshot } from '../hooks/register'
 
 const NOW = Date.parse('2026-10-22T00:00:00Z')
@@ -114,6 +114,19 @@ describe('token-gauge', () => {
       await ui.unmount()
     })
   }
+
+  test('install options', () => {
+    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '.temp' })
+    expect(configure({ actionsAt: 200, handoffDir: '  ' })).toMatchObject({ actionsAt: 70, handoffDir: '.temp' }) // odd values keep defaults
+    configure({ cacheTtl: '5m', actionsAt: 80, showCost: false, handoffDir: 'notes/' })
+    const v = view(calm, NOW, true)
+    expect(v.cache?.text).toBe('4:06') // 5 minutes from the last request
+    expect(v.plan?.cost).toBeUndefined()
+    expect(detail(calm, '오늘')).toBe('세션 3개 · 입력 1.9M / 출력 84k')
+    expect(view({ ...calm, tokens: 700_000 }, NOW, true).ctx?.offerActions).toBe(false) // 72% < 80%
+    expect(handoffText('notes')).toContain('`notes/<YYMMDD>_<task>/PROMPT_<작업 내용>.md`')
+    configure({})
+  })
 
   test('helpers', () => {
     expect(turnsLeft({ ...calm, deltas: [] })).toBeUndefined()
