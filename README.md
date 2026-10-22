@@ -20,9 +20,12 @@
     <td align="center" width="50%"><img src="docs/images/chips.png" alt="칩 줄" width="420"><br>🟢 <b>칩 줄</b><br>한도, 컨텍스트, 캐시를 한 줄로</td>
     <td align="center" width="50%"><img src="docs/images/detail.png" alt="상세 패널" width="420"><br>🔎 <b>상세 패널</b><br>리셋 예측, 오늘 합계, 범주별 막대</td>
   </tr>
+  <tr>
+    <td align="center" colspan="2"><img src="docs/images/terminal.png" alt="터미널 claude에서 칩 줄과 상세 패널이 뜬 모습" width="640"><br>⌨️ <b>터미널(CLI)</b><br>막대는 ▰▱ 문자로, 상세는 같은 내용으로</td>
+  </tr>
 </table>
 
-<sub>Claude 데스크톱 앱 Code 탭, Claude Code 2.1.304, Windows 11에서 찍은 실제 화면입니다. 상세 패널의 "지난 턴" 줄은 개인 경로라 가렸습니다.</sub>
+<sub>모두 Windows 11에서 찍은 실제 화면입니다. 데스크톱 앱 Code 탭은 Claude Code 2.1.304, 터미널은 2.1.306입니다. 상세 패널의 "지난 턴" 줄은 개인 경로라 가렸습니다.</sub>
 
 ## 🚀 설치
 
@@ -182,12 +185,13 @@ claude plugin validate ./plugins/token-gauge
 
 ## 🧪 테스트한 환경
 
-- **확인한 버전**: Claude Code **2.1.304**, Claude 데스크톱 앱 Code 탭, Windows 11 Pro, 구독 로그인(1시간 캐시)
-  - 칩, 상세 패널, 범주별 막대를 실제 화면으로 확인했습니다.
+- **확인한 버전**: Windows 11 Pro, 구독 로그인(1시간 캐시)
+  - Claude 데스크톱 앱 Code 탭, Claude Code **2.1.304**: 칩, 상세 패널, 범주별 막대를 실제 화면으로 확인했습니다.
+  - 터미널(Windows Terminal), Claude Code **2.1.306**: 칩 줄과 상세 패널을 실제 화면으로 확인했습니다.
   - `claude plugin validate`와 `claude plugin test`를 통과합니다. GitHub Actions에서 같은 버전으로 매번 검사합니다.
   - GitHub 주소로 마켓플레이스 추가, 설치, 새 세션 로드를 확인했습니다.
 - **최소 버전**: 2.1.287 (mod 기능이 기본으로 켜지는 버전)
-- **아직 실제 화면으로 확인하지 않은 것**: 터미널 `claude` 화면, macOS와 Linux, `유지 90분` 버튼, 70% 이상일 때의 정리 버튼
+- **아직 실제 화면으로 확인하지 않은 것**: macOS와 Linux, `유지 90분` 버튼, 70% 이상일 때의 정리 버튼
 
 ## 🤖 Claude가 이 저장소를 설치할 때 따를 순서
 

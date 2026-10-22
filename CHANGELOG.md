@@ -10,6 +10,7 @@
 
 - README를 다른 mod 저장소 형식에 맞춰 개편: 로고, 배지, 캡처 갤러리, 접히는 FAQ
 - 변경 기록, 릴리스 절차(docs/RELEASING.md), GitHub Actions CI 추가
+- 터미널(Claude Code 2.1.306) 캡처와 테스트 환경 추가
 
 ## [1.1.0] - 2026-10-22
 
