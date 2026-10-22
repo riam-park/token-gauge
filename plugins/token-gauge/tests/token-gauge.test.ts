@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { configure, fit, forecastText, handoffText, hitRate, itemLabel, largest, pace, slices, stackCells, sumDays, svgBar, text, turnsLeft, view } from '../hooks/register'
+import { configure, fit, forecastText, handoffText, hitRate, isNewer, itemLabel, largest, latestVersion, pace, slices, stackCells, sumDays, svgBar, text, turnsLeft, view } from '../hooks/register'
 import type { Snapshot } from '../hooks/register'
 
 const NOW = Date.parse('2026-10-22T00:00:00Z')
@@ -116,8 +116,9 @@ describe('token-gauge', () => {
   }
 
   test('install options', () => {
-    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '.temp' })
-    expect(configure({ actionsAt: 200, handoffDir: '  ' })).toMatchObject({ actionsAt: 70, handoffDir: '.temp' }) // odd values keep defaults
+    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '' })
+    expect(configure({ actionsAt: 200, handoffDir: '  ' })).toMatchObject({ actionsAt: 70, handoffDir: '' }) // odd values keep defaults
+    expect(handoffText('')).toContain('파일은 만들지 말고 이 답변에') // no folder: the memo comes as the answer
     configure({ cacheTtl: '5m', actionsAt: 80, showCost: false, handoffDir: 'notes/' })
     const v = view(calm, NOW, true)
     expect(v.cache?.text).toBe('4:06') // 5 minutes from the last request
@@ -128,7 +129,46 @@ describe('token-gauge', () => {
     configure({})
   })
 
+  for (const [traffic, toasts] of [[undefined, 1], ['1', 0]] as const) {
+    test(`update check, once a day${toasts ? '' : ', off with nonessential traffic disabled'}`, async ($: any, on: any) => {
+      mock.clock(on, { now: NOW })
+      mock.store(on)
+      let asks = 0
+      const urls: string[] = []
+      const shown: string[] = []
+      on('env.get', (_$: any, e: any) => {
+        if (e.name !== 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC') return { value: undefined }
+        asks++
+        return { value: traffic }
+      })
+      on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+      on('http.fetch', (_$: any, e: any) => {
+        urls.push(e.url)
+        return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ plugins: [{ name: 'token-gauge', version: '9.0.0' }] }) } }
+      })
+      on('fs.read', () => ({ value: JSON.stringify({ version: '1.2.0' }) }))
+      on('ui.toast', (_$: any, e: any) => {
+        shown.push(e.text)
+        return { value: undefined }
+      })
+      const tick = () => new Promise(r => setTimeout(r, 1))
+      for (let n = 1; n <= 2; n++) {
+        // the second session the same day makes no request
+        await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+        for (let i = 0; i < 200 && asks < n; i++) await tick()
+        for (let i = 0; i < 20; i++) await tick() // the check runs on after the start
+      }
+      expect(asks).toBe(2)
+      expect(urls.length).toBe(toasts)
+      expect(shown.length).toBe(toasts)
+      if (toasts) expect(shown[0]).toContain('새 버전 9.0.0(지금 1.2.0)')
+    })
+  }
+
   test('helpers', () => {
+    expect([isNewer('1.10.0', '1.9.3'), isNewer('1.2.0', '1.2.0'), isNewer('1.1.9', '1.2.0'), isNewer('2', '1.9.9')]).toEqual([true, false, false, true])
+    expect(latestVersion('{"plugins":[{"name":"other","version":"5.0.0"},{"name":"token-gauge","version":"1.3.0"}]}')).toBe('1.3.0')
+    expect(latestVersion('<html>rate limited</html>')).toBeUndefined()
     expect(turnsLeft({ ...calm, deltas: [] })).toBeUndefined()
     expect(turnsLeft({ ...calm, deltas: [-50_000, 10_000] })).toBe(86) // shrinking turns are left out
     expect([pace(5, 43), pace(40, 43), pace(60, 43)]).toEqual(['여유', '적정', '과속'])

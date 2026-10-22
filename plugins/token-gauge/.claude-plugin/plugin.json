@@ -1,6 +1,6 @@
 {
   "name": "token-gauge",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Plan limits, context and the prompt-cache countdown as three color-coded chips above the prompt, with a detail panel and token-saving buttons.",
   "author": {
     "name": "yongmin.park",
@@ -33,14 +33,14 @@
     "alerts": {
       "type": "boolean",
       "title": "알림",
-      "description": "5시간 한도 90%, 컨텍스트 80%, 캐시 만료 임박 때 알림을 띄울지.",
+      "description": "5시간 한도 90%, 컨텍스트 80%, 캐시 만료 임박, 새 버전(하루 한 번 GitHub에서 확인) 알림을 띄울지.",
       "default": true
     },
     "handoffDir": {
       "type": "string",
       "title": "인계 메모 폴더",
-      "description": "인계 메모 버튼이 Claude에게 메모를 쓰라고 요청할 저장소 안 폴더.",
-      "default": ".temp"
+      "description": "비워 두면 인계 메모를 세션 답변으로 받습니다. 저장소 안 폴더(예: .temp)를 적으면 그 폴더에 PROMPT 파일로 쓰라고 요청합니다.",
+      "default": ""
     }
   }
 }

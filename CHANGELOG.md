@@ -8,6 +8,16 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-22
+
+### 추가
+
+- 새 버전 알림: 하루 한 번 GitHub의 `marketplace.json`을 읽어 새 버전이 있으면 알려 줍니다. 보내는 정보는 없습니다. `alerts`를 끄거나 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`이면 확인하지 않습니다.
+
+### 변경
+
+- `handoffDir` 기본값을 `.temp`에서 빈 값으로 바꿨습니다. 비워 두면 `인계 메모 후 새 세션` 버튼이 메모를 파일 대신 Claude의 답변으로 요청하므로, 저장소 구조와 관계없이 쓸 수 있습니다. 파일로 받던 방식을 유지하려면 `/plugin configure token-gauge@token-gauge`에서 폴더를 적습니다. 설치할 때 `handoffDir=.temp`를 직접 넣은 경우에는 그 값이 그대로 남습니다.
+
 ## [1.1.1] - 2026-10-22
 
 ### 수정
@@ -38,7 +48,8 @@
 - 캐시 10분 이하에서 `유지 90분` 버튼(cache-tax 연동), 작업 중 칩, 알림, `d` 단축키
 - 초보자용 README와 토큰·캐시 절약 가이드
 
-[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.1.1...HEAD
+[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.2.0...HEAD
+[1.2.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.2.0
 [1.1.1]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.1.1
 [1.1.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.1.0
 [1.0.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.0.0

@@ -94,23 +94,23 @@ claude plugin update token-gauge@token-gauge
   - 지난 턴에 결과가 가장 컸던 도구 호출 3개
   - 캐시 만료 시각, 적중률, 재기록 횟수
 - **버튼**
-  - `/compact`, `인계 메모 후 새 세션`: 컨텍스트가 compact 기준선의 70%를 넘으면 나타납니다.
+  - `/compact`, `인계 메모 후 새 세션`: 컨텍스트가 compact 기준선의 70%를 넘으면 나타납니다. 인계 메모는 기본으로 Claude의 답변으로 받습니다. 새 세션에 붙여 넣어 이어 가면 됩니다.
   - `유지 90분`: 캐시가 10분 이하로 남았을 때, [cache-tax](#-선택-캐시-유지-버튼)를 설치한 경우에만 보입니다.
 - **작업 중 칩** `⏳ 2:14 · 도구 9 · subagent 2 실행 중`: Claude가 일하는 동안 붙습니다.
-- **알림**: 5시간 한도 90%, 컨텍스트 80%, 캐시 만료 5분 전에 한 번씩 알려 줍니다.
+- **알림**: 5시간 한도 90%, 컨텍스트 80%, 캐시 만료 5분 전에 한 번씩 알려 줍니다. 새 버전이 나오면 하루 한 번 알려 줍니다.
 - **단축키**: 칩 줄을 클릭하거나 `Ctrl+X` `Tab`으로 포커스를 옮긴 뒤 `d`
 
 ## ⚙️ 설치할 때 묻는 설정
 
 모두 기본값이 있어서 그냥 넘어가도 됩니다. 나중에 바꾸려면 `/plugin configure token-gauge@token-gauge`를 입력하거나 `/config`에서 찾습니다. 바꾼 값은 새 세션부터 적용됩니다.
 
-| 키           | 이름           | 기본값  | 설명                                                 |
-|--------------|----------------|---------|------------------------------------------------------|
-| `cacheTtl`   | 캐시 수명      | `1h`    | 구독 로그인은 `1h`, API 키나 클라우드 제공자는 `5m`  |
-| `actionsAt`  | 정리 버튼 기준 | `70`    | compact 기준선의 몇 %에서 정리 버튼을 보일지 (50~95) |
-| `showCost`   | 비용 표시      | `true`  | 세션·오늘 비용(달러) 표시                            |
-| `alerts`     | 알림           | `true`  | 한도, 컨텍스트, 캐시 알림                            |
-| `handoffDir` | 인계 메모 폴더 | `.temp` | 인계 메모 버튼이 메모를 쓰라고 할 저장소 안 폴더     |
+| 키           | 이름           | 기본값 | 설명                                                            |
+|--------------|----------------|--------|-----------------------------------------------------------------|
+| `cacheTtl`   | 캐시 수명      | `1h`   | 구독 로그인은 `1h`, API 키나 클라우드 제공자는 `5m`             |
+| `actionsAt`  | 정리 버튼 기준 | `70`   | compact 기준선의 몇 %에서 정리 버튼을 보일지 (50~95)            |
+| `showCost`   | 비용 표시      | `true` | 세션·오늘 비용(달러) 표시                                       |
+| `alerts`     | 알림           | `true` | 한도, 컨텍스트, 캐시, 새 버전 알림                              |
+| `handoffDir` | 인계 메모 폴더 | (비움) | 비우면 답변으로 받음. 폴더(예: `.temp`)를 적으면 그 안에 파일로 |
 
 ## 🧊 선택: 캐시 유지 버튼
 
@@ -163,7 +163,11 @@ claude plugin update token-gauge@token-gauge
 <details>
 <summary><b>안전한가요?</b></summary>
 
-mod는 내 권한으로 실행되는 코드입니다. token-gauge가 하는 일은 사용량 읽기, 화면 그리기, 이 mod 전용 저장소(오늘 합계)에 숫자 쓰기, 버튼을 눌렀을 때 명령 실행뿐입니다. 파일 쓰기와 네트워크 요청은 하지 않습니다. 직접 확인하려면 저장소를 내려받아 아래 명령을 실행해 보세요. 출력의 `hooks:`, `calls:` 줄에 하는 일이 모두 나옵니다.
+mod는 내 권한으로 실행되는 코드입니다. token-gauge가 하는 일은 사용량 읽기, 화면 그리기, 이 mod 전용 저장소(오늘 합계)에 숫자 쓰기, 버튼을 눌렀을 때 명령 실행뿐입니다. 파일은 쓰지 않습니다.
+
+네트워크 요청은 새 버전 확인 하나뿐입니다. 하루 한 번 이 저장소의 `.claude-plugin/marketplace.json`을 읽기만 하고, 내 정보는 보내지 않습니다. `alerts`를 끄거나 환경 변수 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`을 설정하면 확인하지 않습니다. 회사망에서 GitHub가 막혀 있으면 조용히 건너뜁니다.
+
+직접 확인하려면 저장소를 내려받아 아래 명령을 실행해 보세요. 출력의 `hooks:`, `calls:` 줄에 하는 일이 모두 나옵니다.
 
 ```bash
 claude plugin validate ./plugins/token-gauge
@@ -208,12 +212,16 @@ claude plugin validate ./plugins/token-gauge
 4. **설치**: 셸의 `claude plugin install`은 설정 창을 띄우지 않으므로, 2단계에서 받은 값을 `--config`로 넘깁니다. 기본값과 같은 항목은 생략해도 됩니다.
 
    ```bash
-   claude plugin install token-gauge@token-gauge --scope user --config cacheTtl=1h --config actionsAt=70 --config showCost=true --config alerts=true --config handoffDir=.temp
+   claude plugin install token-gauge@token-gauge --scope user --config cacheTtl=1h --config actionsAt=70 --config showCost=true --config alerts=true
    ```
+
+   사용자가 인계 메모를 파일로 받겠다고 하면 `--config handoffDir=<폴더>`를 덧붙입니다. 비워 두면(기본) 답변으로 받습니다.
 
 5. **확인**: `claude plugin list`에서 `token-gauge@token-gauge`가 `enabled`인지 봅니다.
 6. **선택 설치**: 사용자에게 cache-tax(캐시 유지 버튼용)도 설치할지 묻고, 원하면 [선택: 캐시 유지 버튼](#-선택-캐시-유지-버튼)의 두 명령을 같은 방식(`claude plugin marketplace add ...`, `claude plugin install cache-tax@claude-code-mods --scope user`)으로 실행합니다. 마켓플레이스 이름이 겹친다는 오류가 나면 사용자에게 알리고 건너뜁니다.
 7. **마무리 안내**: 지금 세션에는 바로 보이지 않을 수 있으니 `/reload-plugins`를 입력하거나 새 세션을 열라고 알립니다. 첫 응답 뒤에 plan 칩이 채워진다는 것도 알립니다.
+
+사용자가 "token-gauge 업데이트해줘"라고 하면 `claude plugin update token-gauge@token-gauge`를 실행합니다. 이 명령이 마켓플레이스를 먼저 새로 받습니다. 그다음 사용자에게 `/reload-plugins`를 직접 입력하거나 새 세션을 열라고 알립니다.
 
 주의: 사용자의 `settings.json`을 직접 편집하지 말고 위 명령만 씁니다. 다른 플러그인은 건드리지 않습니다.
 

@@ -14,10 +14,15 @@ const TOP = 3
 const STACK_CELLS = 40 // width of the terminal's breakdown bar
 const DAY_PREFIX = 'day:'
 const KEEP_DAYS = 7
+// What `claude plugin update` would install: the version in the marketplace on GitHub.
+const UPDATE_URL = 'https://raw.githubusercontent.com/riam-park/token-gauge/main/.claude-plugin/marketplace.json'
+const UPDATE_EVERY_MS = 24 * 60 * 60_000
+const CHECKED_KEY = 'update:checkedAt'
 
 // The userConfig options in plugin.json, asked at install and changed with /plugin configure or /config.
+// handoffDir '' asks for the handoff memo in the answer; a folder asks for a PROMPT file there.
 export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string }
-const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '.temp' }
+const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '' }
 let cfg = DEFAULTS
 
 // Options as saved, checked: a missing or odd value keeps its default.
@@ -29,15 +34,17 @@ export function configure(o: Record<string, unknown>): Config {
     actionsAt: Number.isFinite(n) && n >= 50 && n <= 95 ? n : DEFAULTS.actionsAt,
     showCost: o.showCost !== false,
     alerts: o.alerts !== false,
-    handoffDir: dir || DEFAULTS.handoffDir,
+    handoffDir: dir,
   }
   return cfg
 }
 
 export function handoffText(dir: string) {
+  const parts = '배경, 관련 파일 경로, 목표, 검증 기준, 범위 밖 항목'
+  if (!dir) return `지금까지의 작업을 인계 메모로 정리해 줘. 파일은 만들지 말고 이 답변에 ${parts}을 써 줘. 새 세션에 이 답변을 붙여 넣어 이어서 작업할 거야.`
   return (
     `지금까지의 작업을 인계 메모로 정리해 줘. 저장소의 \`${dir}/<YYMMDD>_<task>/PROMPT_<작업 내용>.md\`에 ` +
-    '배경, 관련 파일 경로, 목표, 검증 기준, 범위 밖 항목을 쓰고 경로를 알려 줘. 새 세션에서 이 파일로 이어서 작업할 거야.'
+    `${parts}을 쓰고 경로를 알려 줘. 새 세션에서 이 파일로 이어서 작업할 거야.`
   )
 }
 
@@ -130,6 +137,7 @@ export const register: Register = (on, options) => {
     if (usage) takeLimits(usage.rateLimits, usage.cost?.usd)
     await readContext($, false).catch(() => {})
     await readToday($).catch(() => {})
+    if (e.isInteractive && cfg.alerts) void checkUpdate($).catch(() => {}) // offline or blocked: no toast
     return result
   })
 
@@ -275,6 +283,37 @@ async function readToday($: EngineInterface) {
 
 export function sumDays(days: Day[]): Day {
   return days.reduce((a, d) => ({ usd: a.usd + (d.usd || 0), input: a.input + (d.input || 0), output: a.output + (d.output || 0) }), { usd: 0, input: 0, output: 0 })
+}
+
+// Once a day across sessions: one GET of the marketplace file, a toast when it lists a newer version. Nothing is sent.
+async function checkUpdate($: EngineInterface) {
+  if (/^(1|true|yes|on)$/i.test((await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')) ?? '')) return
+  const now = await $.clock.now()
+  if (now - Number(await $.store.get(CHECKED_KEY)) < UPDATE_EVERY_MS) return
+  await $.store.set(CHECKED_KEY, now) // before the request, so sessions opened together ask once
+  const res = await $.http.fetch(UPDATE_URL)
+  if (!res.ok) return
+  const latest = latestVersion(res.text)
+  const current = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)).version
+  if (latest && typeof current === 'string' && isNewer(latest, current)) {
+    $.ui.toast(`token-gauge 새 버전 ${latest}(지금 ${current}) · Claude에게 "token-gauge 업데이트해줘"라고 하면 됩니다`, { timeoutMs: 15_000 })
+  }
+}
+
+export function latestVersion(marketplace: string): string | undefined {
+  try {
+    const entry = (JSON.parse(marketplace).plugins ?? []).find((p: { name?: string }) => p.name === 'token-gauge')
+    return typeof entry?.version === 'string' ? entry.version : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function isNewer(a: string, b: string) {
+  const x = a.split('.').map(n => Number(n) || 0)
+  const y = b.split('.').map(n => Number(n) || 0)
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0)
+  return false
 }
 
 function isOld(key: string, now: number) {
