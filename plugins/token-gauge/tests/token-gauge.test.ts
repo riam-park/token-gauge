@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { configure, fit, forecastText, handoffText, hitRate, isNewer, itemLabel, largest, latestVersion, pace, slices, stackCells, sumDays, svgBar, text, turnsLeft, view } from '../hooks/register'
+import { configure, fit, forecastText, handoffText, hitRate, isNewer, itemLabel, largest, latestVersion, pace, redact, slices, stackCells, sumDays, svgBar, text, turnsLeft, view } from '../hooks/register'
 import type { Snapshot } from '../hooks/register'
 
 const NOW = Date.parse('2026-10-22T00:00:00Z')
@@ -178,6 +178,27 @@ describe('token-gauge', () => {
     expect(itemLabel({ tool: 'Read', file_path: 'C:\\a\\b\\register.tsx' })).toBe('Read register.tsx')
     expect(itemLabel({ tool: 'Bash', command: 'claude  plugin test ./meter-line --verbose' })).toBe('Bash claude plugin test ./me…')
     expect(itemLabel({ tool: 'WebFetch', url: 'https://example.com/a/b' })).toBe('WebFetch example.com')
+    expect(itemLabel({ tool: 'WebFetch', url: 'https://me:hunter2@example.com/a' })).toBe('WebFetch example.com')
+    expect(itemLabel({ tool: 'Bash', command: 'API_TOKEN=abc123 npm publish' })).toBe('Bash API_TOKEN=*** npm publi…')
+  })
+
+  test('redact hides credentials and leaves ordinary commands alone', () => {
+    const hidden: [string, string][] = [
+      ['curl -H "Authorization: Bearer eyJhbGciOi.x.y" https://a.io', 'curl -H "Authorization: ***" https://a.io'],
+      ["curl -H 'X-Api-Key: k123' https://a.io", "curl -H 'X-Api-Key: ***' https://a.io"],
+      ['curl https://a.io -d bearer abcdefghijklmnopqrstu', 'curl https://a.io -d bearer ***'],
+      ['npm login --token=s3cr3t --scope x', 'npm login --token=*** --scope x'],
+      ['tool --password "a b c" run', 'tool --password *** run'],
+      ['Connect-Thing -ApiKey abc -Name x', 'Connect-Thing -ApiKey *** -Name x'],
+      ["$env:GH_PAT = 'ghx' ; git push", '$env:GH_PAT = *** ; git push'],
+      ['export AWS_SECRET_ACCESS_KEY=abc/def', 'export AWS_SECRET_ACCESS_KEY=***'],
+      ['git clone https://x-access-token:abc@github.com/o/r', 'git clone https://x-access-token:***@github.com/o/r'],
+      ['curl -u admin:pw https://a.io', 'curl -u *** https://a.io'],
+      ['echo ghp_abcdefghijklmnopqrstuvwxyz0123 | gh auth login --with-token', 'echo *** | gh auth login --with-token'],
+    ]
+    for (const [from, to] of hidden) expect(redact(from)).toBe(to)
+    const kept = ['PATH=/usr/bin make', 'claude plugin test ./x --verbose', 'mysql -u root', 'git log --format=%h', 'grep -n token_count src', 'basic usage of Bearer auth']
+    for (const s of kept) expect(redact(s)).toBe(s)
     expect(largest([{ label: 'a', tokens: 100 }, { label: 'b', tokens: 9000 }, { label: 'c', tokens: 600 }], 3).map(i => i.label)).toEqual(['b', 'c'])
     const c = hitRate(hitRate({ read: 0, total: 0, rewrites: 0, steps: 0 }, { cache_creation_input_tokens: 50_000 }), { cache_read_input_tokens: 40_000, cache_creation_input_tokens: 60_000, input_tokens: 10 })
     expect(c).toEqual({ read: 40_000, total: 150_010, rewrites: 1, steps: 2 }) // the first write is no rewrite

@@ -646,11 +646,35 @@ export function itemLabel(e: Record<string, unknown>) {
   const base = (p: string) => p.split(/[\\/]/).pop() || p
   let what = ''
   if (str('file_path')) what = base(str('file_path'))
-  else if (str('command')) what = cut(str('command').replace(/\s+/g, ' '), 24)
-  else if (str('url')) what = str('url').replace(/^https?:\/\//, '').split('/')[0]!
-  else if (str('pattern')) what = cut(str('pattern'), 20)
-  else if (str('description')) what = cut(str('description'), 20)
+  else if (str('command')) what = cut(redact(str('command')).replace(/\s+/g, ' '), 24)
+  else if (str('url')) what = str('url').replace(/^https?:\/\//, '').split('/')[0]!.replace(/^[^@]*@/, '')
+  else if (str('pattern')) what = cut(redact(str('pattern')), 20)
+  else if (str('description')) what = cut(redact(str('description')), 20)
   return what ? `${tool} ${what}` : tool
+}
+
+// A shell word: quoted, or up to the next space or quote.
+const WORD = String.raw`("[^"]*"|'[^']*'|[^\s"']+)`
+const SECRET_NAME = String.raw`(?:[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)[A-Z0-9_]*|[A-Z0-9_]+_PAT)` // GH_PAT, not PATH
+const HIDDEN = '***'
+const SECRETS: [RegExp, string][] = [
+  // a header value runs to its closing quote or the end of the line: "Authorization: Bearer x", 'X-Api-Key: x';
+  // a *-token name needs a space after its colon, so https://x-access-token:...@ is left to the URL rule
+  [/((?:authorization\s*:|[a-z0-9-]+-(?:key|token|secret)\s*:(?=\s))\s*)[^"'\r\n]+/gi, `$1${HIDDEN}`],
+  [/\b(bearer\s+)[A-Za-z0-9._~+/=-]{16,}/gi, `$1${HIDDEN}`],
+  // --token x, --api-key=x, and PowerShell's -Token x / -ApiKey x
+  [new RegExp(String.raw`(\s--?(?:password|passwd|token|api-?key|secret|client-?secret)(?:=|:|\s+))` + WORD, 'gi'), `$1${HIDDEN}`],
+  // API_TOKEN=x, export GH_PAT=x, $env:API_KEY = 'x'; upper case only, so path=x or monkey=x stay
+  [new RegExp(String.raw`\b(` + SECRET_NAME + String.raw`\s*=\s*)` + WORD, 'g'), `$1${HIDDEN}`],
+  [/(\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@'"]*:)[^\s/@'"]+@/gi, `$1${HIDDEN}@`],
+  [new RegExp(String.raw`(\s(?:-u|--user)(?:=|\s+))("[^"]*:[^"]*"|'[^']*:[^']*'|[^\s"':]*:[^\s"']+)`, 'g'), `$1${HIDDEN}`],
+  // well-known token shapes passed as bare arguments
+  [/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[A-Z0-9]{16})\b/g, HIDDEN],
+]
+
+// Hides what looks like a credential before a command is shown; a best effort, not a guarantee.
+export function redact(s: string) {
+  return SECRETS.reduce((out, [pattern, to]) => out.replace(pattern, to), s)
 }
 
 // Tokens of a tool result, from its length: about four characters a token.
