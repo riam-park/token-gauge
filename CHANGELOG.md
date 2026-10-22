@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-22
+
 ### 추가
 
 - 모델 칩: 지금 모델과 effort를 네 번째 칩으로 보여 줍니다(`Opus 5.5 · high`). `/model`로 바꾸면 바로 반영하고, effort는 다음 요청부터 다시 보입니다. 폭이 좁으면 비용보다 먼저 접힙니다.
@@ -66,7 +68,8 @@
 - 캐시 10분 이하에서 `유지 90분` 버튼(cache-tax 연동), 작업 중 칩, 알림, `d` 단축키
 - 초보자용 README와 토큰·캐시 절약 가이드
 
-[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.2.0...HEAD
+[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.3.0...HEAD
+[1.3.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.3.0
 [1.2.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.2.0
 [1.1.1]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.1.1
 [1.1.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.1.0

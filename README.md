@@ -203,7 +203,7 @@ claude plugin validate ./plugins/token-gauge
   - `claude plugin validate`와 `claude plugin test`를 통과합니다. GitHub Actions에서 같은 버전으로 매번 검사합니다.
   - GitHub 주소로 마켓플레이스 추가, 설치, 새 세션 로드를 확인했습니다.
 - **최소 버전**: 2.1.287 (mod 기능이 기본으로 켜지는 버전)
-- **아직 실제 화면으로 확인하지 않은 것**: macOS와 Linux, `유지 90분` 버튼, 70% 이상일 때의 정리 버튼
+- **아직 실제 화면으로 확인하지 않은 것**: macOS와 Linux, `유지 90분` 버튼, 70% 이상일 때의 정리 버튼, 1.3.0에서 더한 모델 칩/입력창 아래 배치/질문 카드 위 칩/막힌 프롬프트 질문 카드/상세 패널 `중복`과 `compact` 줄/절약 팁(시험과 엔진 검사만 통과)
 
 ## 🤖 Claude가 이 저장소를 설치할 때 따를 순서
 
