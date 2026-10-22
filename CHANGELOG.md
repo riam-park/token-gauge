@@ -8,6 +8,13 @@
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-22
+
+### 수정
+
+- 데스크톱 앱에서 칩 줄이 보이지 않던 문제: 1.3.0의 기본값 `desktopPlace` `below`는 칩을 입력창 아래 힌트 자리에 그렸지만, 데스크톱 앱은 그 자리를 한 줄 높이로 잘라 그려 칩이 모두 가려졌습니다. 기본값을 `above`(입력창 위, 1.2.x 동작)로 되돌립니다.
+- `below`를 고르면 입력창 아래 힌트 옆에 칩 내용을 색 글자 한 줄로 보여 줍니다. 테두리, 막대, 버튼, 상세 패널은 없습니다.
+
 ## [1.3.0] - 2026-10-22
 
 ### 추가
@@ -68,7 +75,8 @@
 - 캐시 10분 이하에서 `유지 90분` 버튼(cache-tax 연동), 작업 중 칩, 알림, `d` 단축키
 - 초보자용 README와 토큰·캐시 절약 가이드
 
-[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.3.0...HEAD
+[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.3.1...HEAD
+[1.3.1]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.3.1
 [1.3.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.3.0
 [1.2.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.2.0
 [1.1.1]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.1.1

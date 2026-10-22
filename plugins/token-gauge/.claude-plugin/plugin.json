@@ -1,6 +1,6 @@
 {
   "name": "token-gauge",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Plan limits, context, the prompt-cache countdown and the model as color-coded chips above the prompt, with a detail panel, token-saving buttons and tips.",
   "author": {
     "name": "yongmin.park",
@@ -45,9 +45,9 @@
     "desktopPlace": {
       "type": "string",
       "title": "데스크톱 칩 위치",
-      "description": "데스크톱 앱에서 칩 줄을 입력창 위(above)에 둘지, 입력창 아래 힌트 줄 밑(below)에 둘지. 터미널은 늘 입력창 위입니다.",
+      "description": "데스크톱 앱에서 칩 줄을 입력창 위(above)에 둘지, 입력창 아래 힌트 줄 옆에 한 줄 글자(below)로 둘지. below는 테두리, 버튼, 상세 패널이 없습니다. 터미널은 늘 입력창 위입니다.",
       "options": ["above", "below"],
-      "default": "below"
+      "default": "above"
     }
   }
 }

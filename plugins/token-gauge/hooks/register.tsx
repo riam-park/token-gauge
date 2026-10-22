@@ -41,9 +41,9 @@ const QUESTION_LINE = 80 // the terminal's line above a question: two of its 40-
 
 // The userConfig options in plugin.json, asked at install and changed with /plugin configure or /config.
 // handoffDir '' asks for the handoff memo in the answer; a folder asks for a PROMPT file there.
-// below: on the desktop, the chips go under the prompt (desktopPlace 'below', the default) rather than above it.
+// below: on the desktop, the chips go under the prompt as one line of text (desktopPlace 'below') rather than above it (the default).
 export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string; below: boolean }
-const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', below: true }
+const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', below: false }
 let cfg = DEFAULTS
 
 // Options as saved, checked: a missing or odd value keeps its default.
@@ -56,7 +56,7 @@ export function configure(o: Record<string, unknown>): Config {
     showCost: o.showCost !== false,
     alerts: o.alerts !== false,
     handoffDir: dir,
-    below: o.desktopPlace !== 'above',
+    below: o.desktopPlace === 'below',
   }
   return cfg
 }
@@ -353,13 +353,14 @@ export const register: Register = (on, options) => {
     return { type: 'Box', props: { flexDirection: 'column' }, children: rest ? [band, rest] : [band] }
   })
 
-  // Under the prompt, after the engine's hint line: the desktop's empty space below the input.
+  // Under the prompt, after the engine's hint: the desktop draws this site one line high and clips the rest,
+  // so the chips are one line of text there, without borders, buttons or the detail panel.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const rest = await next(e)
     if (e.surface !== 'desktop' || !cfg.below) return rest
-    const band = await bandTree($, $.ui.resolve(e), false, (e.viewport?.columns ?? QUESTION_COLUMNS) - 2, e.props.isWorking ? 'working' : 'idle', false)
-    if (!band) return rest
-    return { type: 'Box', props: { flexDirection: 'column' }, children: rest ? [rest, band] : [band] }
+    const line = questionLine($.ui.resolve(e), fit(view(snap, await $.clock.now(), false), (e.viewport?.columns ?? QUESTION_COLUMNS) - 2))
+    if (!line) return rest
+    return { type: 'Box', props: { flexDirection: 'row', gap: 2 }, children: rest ? [rest, line] : [line] }
   })
 
   // A question dialog takes the prompt's place, the band with it: the chips stand above the question.
@@ -855,7 +856,7 @@ function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working: (Wor
   )
 }
 
-// The chips as one line of colored text, for the terminal's few rows above a question dialog.
+// The chips as one line of colored text, for the terminal's few rows above a question dialog and the desktop's hint line.
 function questionLine(ui: any, v: View) {
   const { Text } = ui
   const parts: unknown[] = []
