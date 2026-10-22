@@ -11,6 +11,7 @@ const KEEP_BELOW_MS = 10 * 60_000
 const CACHE_ALERT_MS = 5 * 60_000
 const DELTAS = 5
 const TOP = 3
+const STACK_CELLS = 40 // width of the terminal's breakdown bar
 const DAY_PREFIX = 'day:'
 const KEEP_DAYS = 7
 
@@ -201,7 +202,6 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const rest = await next(e) // what other mods and Claude Code draw here stays
-    if (e.props.hasSurvey) return rest
     const now = await $.clock.now()
     const v = fit(view(snap, now, hasKeepwarm), e.props.bodyColumns - 2)
     if (!v.plan && !v.ctx && !v.cache) return rest
@@ -225,7 +225,8 @@ export const register: Register = (on, options) => {
       },
     }
     const working = e.props.isWorking && work ? { ...work, elapsed: now - work.since } : undefined
-    const band = draw($.ui.resolve(e), v, e.surface === 'terminal', act, working)
+    // A survey (a question in the band) keeps the chip row, without buttons or the detail panel, so the question keeps the room
+    const band = draw($.ui.resolve(e), v, e.surface === 'terminal', act, working, e.props.hasSurvey)
     return { type: 'Box', props: { flexDirection: 'column' }, children: rest ? [band, rest] : [band] }
   })
 }
@@ -440,7 +441,7 @@ function width(v: View) {
 
 type Actions = { keepWarm: () => void; compact: () => void; handoff: () => void; toggle: () => void }
 
-function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working?: Work & { elapsed: number }) {
+function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working: (Work & { elapsed: number }) | undefined, isYielding: boolean) {
   const { Box, Text, Button, Svg } = ui
   const dim = (s: string) => <Text dimColor>{s}</Text>
   const num = (s: string, color?: string) => (
@@ -484,7 +485,7 @@ function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working?: Wor
     const k = v.cache
     const kids: unknown[] = [<Text color={k.color}>❄</Text>, num(k.text, k.isCold ? k.color : undefined)]
     if (k.rewrite) kids.push(dim(k.rewrite))
-    if (k.offerKeep) kids.push(<Button key="token-gauge-keep" label="유지 90분" onPress={act.keepWarm} />)
+    if (k.offerKeep && !isYielding) kids.push(<Button key="token-gauge-keep" label="유지 90분" onPress={act.keepWarm} />)
     chips.push(chip('token-gauge-cache', k.color, kids))
   }
   if (working) {
@@ -492,18 +493,18 @@ function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working?: Wor
     if (working.agents) kids.push(dim(`· subagent ${working.agents} 실행 중`))
     chips.push(chip('token-gauge-work', C.yellow, kids))
   }
-  if (v.ctx?.offerActions && !working) {
+  if (v.ctx?.offerActions && !working && !isYielding) {
     chips.push(<Button key="token-gauge-compact" label="/compact" onPress={act.compact} />)
     chips.push(<Button key="token-gauge-handoff" label="인계 메모 후 새 세션" onPress={act.handoff} />)
   }
-  chips.push(<Button key="token-gauge-more" label={showDetail ? '▴ 접기' : '▾ 상세'} hotkey="d" plain dimColor onPress={act.toggle} />)
+  if (!isYielding) chips.push(<Button key="token-gauge-more" label={showDetail ? '▴ 접기' : '▾ 상세'} hotkey="d" plain dimColor onPress={act.toggle} />)
 
   const rows: unknown[] = [
     <Box key="token-gauge-chips" flexDirection="row" alignItems="center" gap={1}>
       {chips}
     </Box>,
   ]
-  if (showDetail) {
+  if (showDetail && !isYielding) {
     const line = (label: string, kids: unknown[]) => (
       <Box key={`token-gauge-d-${label}`} flexDirection="row" gap={1}>
         <Box width={8}>{dim(label)}</Box>
@@ -514,7 +515,18 @@ function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working?: Wor
     for (const d of v.detail) {
       lines.push(line(d.label, [<Text>{d.text}</Text>]))
       if (d.label === 'context' && v.slices.length) {
-        lines.push(line(' ', [isTerminal ? <Text>{v.slices.map(x => textBar(x.share, 1)).join('')}</Text> : <Svg source={svgStack(v.slices, 420)} alt="context breakdown" width={420} height={10} />]))
+        const stack = isTerminal ? (
+          <Box flexDirection="row">
+            {stackCells(v.slices, STACK_CELLS).map((r, i) => (
+              <Text key={String(i)} color={r.color} dimColor={!r.color}>
+                {(r.color ? '█' : '░').repeat(r.cells)}
+              </Text>
+            ))}
+          </Box>
+        ) : (
+          <Svg source={svgStack(v.slices, 420)} alt="context breakdown" width={420} height={10} />
+        )
+        lines.push(line(' ', [stack]))
         lines.push(
           line(' ', [
             <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
@@ -542,6 +554,13 @@ function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working?: Wor
       {rows}
     </Box>
   )
+}
+
+// The terminal's breakdown bar as runs of cells: each category its share of `n`, at least one cell, then free space (no color).
+export function stackCells(list: View['slices'], n: number) {
+  const runs = list.map(s => ({ color: s.color as string | undefined, cells: Math.max(1, Math.round((s.share / 100) * n)) }))
+  const used = runs.reduce((a, r) => a + r.cells, 0)
+  return used < n ? [...runs, { color: undefined, cells: n - used }] : runs
 }
 
 // The categories with their colors and their share of the whole window.

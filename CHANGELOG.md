@@ -8,9 +8,18 @@
 
 ## [Unreleased]
 
-- README를 다른 mod 저장소 형식에 맞춰 개편: 로고, 배지, 캡처 갤러리, 접히는 FAQ
+## [1.1.1] - 2026-10-22
+
+### 수정
+
+- 터미널에서 상세 패널의 범주별 막대가 범주마다 빈 칸 하나(`▱`)로만 그려지던 문제. 이제 40칸 안에서 비율대로 색 블록(`█`)을 그리고, 남은 공간은 `░`로 표시합니다.
+- 질문 카드(survey)가 입력창 위를 차지하는 동안 칩 줄이 통째로 사라지던 문제. 이제 칩 줄은 남기고, 버튼과 상세 패널만 숨겨 질문 자리를 비워 둡니다.
+
+### 문서
+
+- README를 다른 mod 저장소 형식에 맞춰 개편: 로고, 배지, 데스크톱·터미널 캡처 갤러리, 접히는 FAQ
 - 변경 기록, 릴리스 절차(docs/RELEASING.md), GitHub Actions CI 추가
-- 터미널(Claude Code 2.1.306) 캡처와 테스트 환경 추가
+- 테스트한 환경에 터미널(Claude Code 2.1.306) 추가
 
 ## [1.1.0] - 2026-10-22
 
@@ -29,6 +38,7 @@
 - 캐시 10분 이하에서 `유지 90분` 버튼(cache-tax 연동), 작업 중 칩, 알림, `d` 단축키
 - 초보자용 README와 토큰·캐시 절약 가이드
 
-[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.1.0...HEAD
+[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.1.1...HEAD
+[1.1.1]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.1.1
 [1.1.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.1.0
 [1.0.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.0.0

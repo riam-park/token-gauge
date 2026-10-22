@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { configure, fit, forecastText, handoffText, hitRate, itemLabel, largest, pace, slices, sumDays, svgBar, text, turnsLeft, view } from '../hooks/register'
+import { configure, fit, forecastText, handoffText, hitRate, itemLabel, largest, pace, slices, stackCells, sumDays, svgBar, text, turnsLeft, view } from '../hooks/register'
 import type { Snapshot } from '../hooks/register'
 
 const NOW = Date.parse('2026-10-22T00:00:00Z')
@@ -77,8 +77,8 @@ describe('token-gauge', () => {
     expect(text(fit(v, 93))).toBe('[plan 5h 5% ▰▱ ↻2h52]  [☀ context ▰▱ 113k / 1M 11%]  [❄ 59:06]')
   })
 
-  for (const surface of ['terminal', 'desktop'] as const) {
-    test(`mounts the band (${surface})`, async ($: any, on: any) => {
+  for (const [surface, hasSurvey] of [['terminal', false], ['desktop', false], ['desktop', true]] as const) {
+    test(`mounts the band (${surface}${hasSurvey ? ', under a survey' : ''})`, async ($: any, on: any) => {
       mock.clock(on, { now: NOW })
       on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
       on('session.usage', () => ({
@@ -105,11 +105,11 @@ describe('token-gauge', () => {
       }))
       on('ui.render', ($$: any, e: any) => $$.ui.resolve(e).Text({ children: 'engine band' }))
       await $.session.start({ surface, isInteractive: true, cwd: '/work' })
-      const ui = await $.ui.mount({ plugin: 'token-gauge', surface, component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 } })
-      expect(await ui.find({ type: 'Text', text: '☀' })).toBeDefined()
+      const ui = await $.ui.mount({ plugin: 'token-gauge', surface, component: 'AbovePrompt', props: { hasSurvey, isWorking: false, maxRows: 10, bodyColumns: 160 } })
+      expect(await ui.find({ type: 'Text', text: '☀' })).toBeDefined() // the chips stay, a survey or not
       expect(await ui.find({ type: 'Text', text: /engine band/ })).toBeDefined() // stacked, not replaced
       expect(Boolean(await ui.find({ type: 'Svg' }))).toBe(surface === 'desktop')
-      expect(await ui.find({ type: 'Button', label: '▾ 상세' })).toBeDefined()
+      expect(Boolean(await ui.find({ type: 'Button', label: '▾ 상세' }))).toBe(!hasSurvey) // a survey keeps the row free of buttons
       expect(await ui.find({ type: 'Text', text: /^리셋/ })).toBeUndefined() // closed until pressed
       await ui.unmount()
     })
@@ -142,6 +142,9 @@ describe('token-gauge', () => {
     const c = hitRate(hitRate({ read: 0, total: 0, rewrites: 0, steps: 0 }, { cache_creation_input_tokens: 50_000 }), { cache_read_input_tokens: 40_000, cache_creation_input_tokens: 60_000, input_tokens: 10 })
     expect(c).toEqual({ read: 40_000, total: 150_010, rewrites: 1, steps: 2 }) // the first write is no rewrite
     expect(slices([{ name: 'a', tokens: 100 }], 1000)[0]!.share).toBe(10)
+    // terminal breakdown: each category its share of 40 cells, at least one, then free space
+    const runs = stackCells(slices([{ name: 'system prompt', tokens: 9700 }, { name: 'messages', tokens: 200_000 }], 1_000_000), 40)
+    expect(runs).toEqual([{ color: '#6AA9F0', cells: 1 }, { color: '#F59E4B', cells: 8 }, { color: undefined, cells: 31 }])
     expect(svgBar({ percent: 1, color: '#000', marker: 50 }, 48)).toContain('x="24.0"')
   })
 })

@@ -1,6 +1,6 @@
 {
   "name": "token-gauge",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Plan limits, context and the prompt-cache countdown as three color-coded chips above the prompt, with a detail panel and token-saving buttons.",
   "author": {
     "name": "yongmin.park",
