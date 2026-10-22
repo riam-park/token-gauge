@@ -1,0 +1,15 @@
+{
+  "name": "token-gauge",
+  "description": "token-gauge: a Claude Code mod that keeps plan limits, context and the prompt cache in view.",
+  "owner": {
+    "name": "yongmin.park"
+  },
+  "plugins": [
+    {
+      "name": "token-gauge",
+      "description": "Plan limits, context and the prompt-cache countdown as three color-coded chips above the prompt, with a detail panel and token-saving buttons.",
+      "version": "1.0.0",
+      "source": "./plugins/token-gauge"
+    }
+  ]
+}

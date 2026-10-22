@@ -1,0 +1,10 @@
+{
+  "name": "token-gauge",
+  "version": "1.0.0",
+  "description": "Plan limits, context and the prompt-cache countdown as three color-coded chips above the prompt, with a detail panel and token-saving buttons.",
+  "author": {
+    "name": "yongmin.park",
+    "url": "https://github.com/riam-park"
+  },
+  "license": "MIT"
+}
