@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mod:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # The version the mod was last checked on in the Desktop app. Bump on purpose, with README's tested section.
+      CLAUDE_CODE_VERSION: 2.1.304
+      DISABLE_AUTOUPDATER: 1
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install Claude Code
+        run: |
+          npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          claude --version
+
+      - name: Validate the marketplace
+        run: claude plugin validate .
+
+      - name: Validate the mod
+        run: claude plugin validate ./plugins/token-gauge
+
+      - name: Test the mod
+        run: claude plugin test ./plugins/token-gauge
+
+      - name: Versions agree
+        run: |
+          a=$(node -p "require('./plugins/token-gauge/.claude-plugin/plugin.json').version")
+          b=$(node -p "require('./.claude-plugin/marketplace.json').plugins[0].version")
+          echo "plugin.json $a, marketplace.json $b"
+          test "$a" = "$b"
