@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { configure, fit, forecastText, handoffText, hitRate, isNewer, itemLabel, largest, latestVersion, pace, redact, slices, stackCells, sumDays, svgBar, text, turnsLeft, view } from '../hooks/register'
+import { advice, calibrate, configure, fit, fnv, forecastText, handoffText, hitRate, isNewer, itemLabel, largest, latestVersion, lostFiles, modelName, pace, readKind, redact, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
 import type { Snapshot } from '../hooks/register'
 
 const NOW = Date.parse('2026-10-22T00:00:00Z')
@@ -42,7 +42,7 @@ describe('token-gauge', () => {
     expect(detail(calm, '7d')).toMatch(/^리셋 .+ \(3d0h\) · 이 속도면 리셋 때 ~66%$/)
     expect(detail(calm, '오늘')).toBe('$4.80 · 세션 3개 · 입력 1.9M / 출력 84k')
     expect(detail(calm, 'context')).toBe('compact까지 854k · 최근 평균 +1.3k/턴')
-    expect(detail(calm, '지난 턴')).toBe('큰 결과: Read register.tsx 18k')
+    expect(detail(calm, '지난 턴')).toBe('큰 결과: Read register.tsx ≈18k')
     expect(detail(calm, '캐시')).toContain('적중률 94% · 재기록 0회')
     expect(view(calm, NOW, true).slices.map(x => x.color)).toEqual(['#6AA9F0', '#F59E4B']) // messages keep their own color
   })
@@ -207,5 +207,96 @@ describe('token-gauge', () => {
     const runs = stackCells(slices([{ name: 'system prompt', tokens: 9700 }, { name: 'messages', tokens: 200_000 }], 1_000_000), 40)
     expect(runs).toEqual([{ color: '#6AA9F0', cells: 1 }, { color: '#F59E4B', cells: 8 }, { color: undefined, cells: 31 }])
     expect(svgBar({ percent: 1, color: '#000', marker: 50 }, 48)).toContain('x="24.0"')
+  })
+
+  test('k: measured growth over estimated results, kept within 0.5 to 2', () => {
+    const t = { first: 10_000, last: 16_000, outputs: 1500, lastOutput: 500, count: 3, compacted: false }
+    expect(turnSample(t, 4000)).toEqual({ growth: 5000, est: 4000 }) // outputs before the last are not results
+    expect(turnSample({ ...t, compacted: true }, 4000)).toBeUndefined()
+    expect(turnSample({ ...t, count: 1 }, 4000)).toBeUndefined()
+    expect(calibrate([{ growth: 3000, est: 2000 }, { growth: 3000, est: 2000 }])).toBe(1.5)
+    expect(calibrate([{ growth: 50_000, est: 2000 }])).toBe(2)
+    expect(calibrate([{ growth: 5000, est: 1000 }, { growth: -10, est: 9000 }])).toBeUndefined() // too small, shrunk
+    const k = view({ ...calm, k: 1.5 }, NOW, true)
+    expect(k.detail.find(d => d.label === '지난 턴')?.text).toBe('큰 결과: Read register.tsx ≈27k · 추정 ×1.50')
+  })
+
+  test('re-reads: only an unchanged read of the same range in the same epoch is waste', () => {
+    const prior = { hash: 1, epoch: 0, seq: 5 }
+    expect(readKind(undefined, 0, 0, 1)).toBe('first')
+    expect(readKind(prior, 6, 0, 1)).toBe('after-edit')
+    expect(readKind(prior, 0, 1, 1)).toBe('after-compaction')
+    expect(readKind(prior, 0, 0, 2)).toBe('changed')
+    expect(readKind(prior, 0, 0, 1)).toBe('unchanged')
+    expect(fnv('a')).not.toBe(fnv('b'))
+    const s: Snapshot = { ...calm, waste: { rereads: 3, rereadTokens: 12_000, rereadTop: { name: 'a.ts', count: 2 }, repeats: 1, repeatTokens: 900, repeatTop: 'Bash make' } }
+    expect(detail(s, '중복')).toBe('변경 없는 재읽기 3회 ≈12k (a.ts 2회) · 같은 출력 1회 ≈900 (Bash make)')
+    expect(detail(calm, '중복')).toBeUndefined()
+  })
+
+  test('compaction: sizes and the edited files its summary dropped, carried into the handoff', () => {
+    const lost = lostFiles(['/w/a.ts', 'C:\\w\\b.py'], [{ text: 'edited a.ts', toolUses: [] }])
+    expect(lost).toEqual(['C:\\w\\b.py'])
+    expect(detail({ ...calm, compaction: { before: 312_000, after: 41_000, lost } }, 'compact')).toBe('312k → 41k · 요약에 빠진 편집 파일 1개: b.py')
+    expect(detail({ ...calm, compaction: { lost: [] } }, 'compact')).toBe('완료')
+    expect(handoffText('', lost)).toMatch(/compact 요약에 빠진 편집 파일도 메모에 넣어 줘: C:\\w\\b\.py$/)
+    expect(handoffText('')).not.toContain('compact')
+  })
+
+  test('advice: whole large files, long outputs, unused MCP servers', () => {
+    expect(advice({ tool: 'Read', file_path: '/w/big.ts' }, 'Read big.ts', 12_000)?.key).toBe('large-read')
+    expect(advice({ tool: 'Read', file_path: '/w/big.ts', offset: 1, limit: 200 }, 'Read big.ts', 12_000)).toBeUndefined()
+    expect(advice({ tool: 'Bash', command: 'make' }, 'Bash make', 9000)?.text).toBe('긴 명령 출력: Bash make ≈9k · head/tail/grep으로 줄이면 됩니다')
+    expect(advice({ tool: 'Agent' }, 'Agent', 9000)?.key).toBe('large-agent')
+    expect(advice({ tool: 'Bash', command: 'ls' }, 'Bash ls', 300)).toBeUndefined()
+    const tools = [
+      { serverName: 'claude.ai Gmail', tokens: 6000, isLoaded: true },
+      { serverName: 'github', tokens: 4000, isLoaded: true },
+      { serverName: 'github', tokens: 4000, isLoaded: true },
+      { serverName: 'docs', tokens: 9000, isLoaded: false }, // deferred: not in the window
+      { serverName: 'small', tokens: 1000, isLoaded: true },
+    ]
+    expect(unusedServers(tools, new Set())).toEqual([{ server: 'github', tokens: 8000 }, { server: 'claude.ai Gmail', tokens: 6000 }])
+    expect(unusedServers(tools, new Set(['github', 'claudeaigmail']))).toEqual([]) // mcp__claude_ai_Gmail__x was called
+  })
+
+  test('model chip: name and effort, dropped before the cost when narrow', () => {
+    expect(modelName('claude-opus-5-5')).toBe('Opus 5.5')
+    expect(modelName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
+    expect(modelName('claude-opus-4-20250514')).toBe('Opus 4')
+    expect(modelName('claude-sonnet-4-6[1m]')).toBe('Sonnet 4.6 1M')
+    expect(modelName('gpt-like-model')).toBe('gpt-like-model')
+    const v = view({ ...calm, model: 'claude-opus-5-5', effort: 'high' }, NOW, false)
+    expect(v.model).toEqual({ name: 'Opus 5.5', effort: 'high', color: '#A78BFA' })
+    expect(text(v)).toMatch(/  \[Opus 5\.5 · high\]$/)
+    expect(text(fit(v, 114))).toBe('[plan 5h 5% ▰▱ ↻2h52 · 7d 38% ↻3d0h · $1.27]  [☀ context ▰▱ 113k / 1M 11%]  [❄ 59:06]')
+    expect(view({ ...calm, model: 'x' }, NOW, false).model?.color).toBe('#9A9A9A')
+  })
+
+  // Last: the module keeps this session's tracking, and the panel stays open.
+  test('a session: re-reads and repeats in the panel, a long output advises once', async ($: any, on: any) => {
+    mock.clock(on, { now: NOW })
+    mock.store(on)
+    const shown: string[] = []
+    on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+    on('session.usage', () => ({ value: { startedAt: NOW, context: { tokens: 50_000, window: 1_000_000 }, rateLimits: [] } }))
+    on('session.model', () => ({ value: 'claude-opus-5-5' }))
+    on('ui.toast', (_$: any, e: any) => {
+      shown.push(e.text)
+      return { value: undefined }
+    })
+    on('ui.render', ($$: any, e: any) => $$.ui.resolve(e).Text({ children: 'engine band' }))
+    on('tool.call', (_$: any, e: any) => ({ result: e.tool === 'Bash' ? 'x'.repeat(40_000) : `content of ${e.file_path}` }))
+    await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
+    for (let i = 0; i < 2; i++) {
+      await $.tool.call({ tool: 'Read', file_path: '/w/a.ts' })
+      await $.tool.call({ tool: 'Bash', command: 'make log' })
+    }
+    const ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 200 } })
+    expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
+    await ui.press({ key: 'token-gauge-more' })
+    expect(await ui.find({ type: 'Text', text: /^변경 없는 재읽기 1회 ≈\d+ \(a\.ts 1회\) · 같은 출력 1회 ≈10k \(Bash make log\)$/ })).toBeDefined()
+    expect(shown.filter(t => t.startsWith('긴 명령 출력: Bash make log')).length).toBe(1)
+    await ui.unmount()
   })
 })

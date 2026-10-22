@@ -1,8 +1,11 @@
 // Token Gauge: plan usage, context and the prompt-cache countdown above the prompt, as three chips.
 //   [plan 5h 5% ▰▱ ↻2h52 · 7d 38% · $1.27]  [☀ context ▰▱ 113k / 1M 11% · ▲1.3k · ≈ 600턴]  [❄ 59:06]  ▾ 상세
 // Colors follow state as token-weather's forecast does; ▾ (or d with the band focused) opens a detail panel:
-// reset forecasts, today's total over every session, /context's breakdown, the last turn's largest results
-// and the cache hit rate. While Claude works a ⏳ chip shows the time, tool calls and running subagents.
+// reset forecasts, today's total over every session, /context's breakdown, the last turn's largest results,
+// unchanged re-reads and repeated outputs, what a compaction dropped and the cache hit rate. A fourth chip
+// shows the model and its effort. While Claude works a ⏳ chip shows the time, tool calls and running subagents.
+// Estimates (≈) are characters / 4, scaled by k: the input growth measured between a turn's requests over
+// the estimated tool results that caused it.
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 const WINDOW_MS: Record<string, number> = { five_hour: 5 * 60 * 60_000, seven_day: 7 * 24 * 60 * 60_000 }
@@ -18,6 +21,17 @@ const KEEP_DAYS = 7
 const UPDATE_URL = 'https://raw.githubusercontent.com/riam-park/token-gauge/main/.claude-plugin/marketplace.json'
 const UPDATE_EVERY_MS = 24 * 60 * 60_000
 const CHECKED_KEY = 'update:checkedAt'
+const SAMPLES = 10 // turns k is measured over
+const MIN_SAMPLE_EST = 2_000 // a turn whose results are smaller says little about k
+const K_MIN = 0.5
+const K_MAX = 2
+const REPEAT_MIN = 200 // outputs smaller than this are not worth calling repeats
+const LARGE_READ = 10_000
+const LARGE_OUTPUT = 8_000
+const UNUSED_MCP = 5_000
+const UNUSED_AFTER_TURNS = 10
+const LARGE_MEMORY = 8_000
+const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit'])
 
 // The userConfig options in plugin.json, asked at install and changed with /plugin configure or /config.
 // handoffDir '' asks for the handoff memo in the answer; a folder asks for a PROMPT file there.
@@ -39,12 +53,14 @@ export function configure(o: Record<string, unknown>): Config {
   return cfg
 }
 
-export function handoffText(dir: string) {
+// `lost`: files edited this session that the last compaction's summary no longer names.
+export function handoffText(dir: string, lost: readonly string[] = []) {
   const parts = '배경, 관련 파일 경로, 목표, 검증 기준, 범위 밖 항목'
-  if (!dir) return `지금까지의 작업을 인계 메모로 정리해 줘. 파일은 만들지 말고 이 답변에 ${parts}을 써 줘. 새 세션에 이 답변을 붙여 넣어 이어서 작업할 거야.`
+  const keep = lost.length ? ` compact 요약에 빠진 편집 파일도 메모에 넣어 줘: ${lost.join(', ')}` : ''
+  if (!dir) return `지금까지의 작업을 인계 메모로 정리해 줘. 파일은 만들지 말고 이 답변에 ${parts}을 써 줘. 새 세션에 이 답변을 붙여 넣어 이어서 작업할 거야.${keep}`
   return (
     `지금까지의 작업을 인계 메모로 정리해 줘. 저장소의 \`${dir}/<YYMMDD>_<task>/PROMPT_<작업 내용>.md\`에 ` +
-    `${parts}을 쓰고 경로를 알려 줘. 새 세션에서 이 파일로 이어서 작업할 거야.`
+    `${parts}을 쓰고 경로를 알려 줘. 새 세션에서 이 파일로 이어서 작업할 거야.${keep}`
   )
 }
 
@@ -67,6 +83,8 @@ const FORECAST = [
   { below: 90, icon: '☇', color: C.orange },
   { below: Infinity, icon: '↯', color: C.red },
 ]
+// The model chip's border, by family.
+const FAMILY: Record<string, string> = { opus: C.violet, sonnet: C.blue, haiku: C.green, fable: C.pink }
 // /context's categories in the detail bar; messages keep their own color, as context-bar draws them.
 const SLICE_COLORS = [C.blue, C.cyan, C.violet, C.green, C.yellow, C.pink]
 const MESSAGES = C.orange
@@ -75,6 +93,9 @@ type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 export type Slice = { name: string; tokens: number }
 export type Item = { label: string; tokens: number }
 export type Day = { usd: number; input: number; output: number }
+// Raw estimates; the view scales them by k.
+export type Waste = { rereads: number; rereadTokens: number; rereadTop?: { name: string; count: number }; repeats: number; repeatTokens: number; repeatTop?: string }
+export type Compaction = { before?: number; after?: number; lost: string[] }
 export type Snapshot = {
   limits: Limit[]
   costUsd?: number
@@ -87,6 +108,11 @@ export type Snapshot = {
   top: Item[] // the last main-thread turn's largest tool results
   cache: { read: number; total: number; rewrites: number; steps: number }
   today?: { sessions: number } & Day
+  k?: number // estimate scale, undefined until a turn measured it
+  waste?: Waste
+  compaction?: Compaction // the last one this session
+  model?: string
+  effort?: string | number
 }
 type Bar = { percent: number; color: string; marker?: number }
 export type View = {
@@ -100,8 +126,18 @@ export type View = {
   cache?: { color: string; text: string; isCold: boolean; rewrite?: string; offerKeep: boolean }
   detail: { label: string; text: string }[]
   slices: { name: string; tokens: number; color: string; share: number }[]
+  model?: { name: string; effort?: string; color: string }
 }
 type Work = { since: number; tools: number; agents: number }
+// A main-thread turn's requests: the first and last input, every output and the last one.
+type Steps = { first?: number; last?: number; outputs: number; lastOutput: number; count: number; compacted: boolean }
+export type Sample = { growth: number; est: number }
+type Seen = { hash: number; epoch: number; seq: number }
+type FileSeen = { ranges: Record<string, Seen>; editedAt: number }
+export type ReadKind = 'first' | 'after-edit' | 'after-compaction' | 'changed' | 'unchanged'
+type McpTool = { serverName: string; tokens: number; isLoaded: boolean }
+type MemoryFile = { path: string; tokens: number }
+type Advice = { key: string; text: string }
 
 const empty = (): Snapshot => ({ limits: [], slices: [], deltas: [], top: [], cache: { read: 0, total: 0, rewrites: 0, steps: 0 } })
 let snap: Snapshot = empty()
@@ -112,6 +148,34 @@ let work: Work | undefined // the main-thread turn in progress
 let turnItems: Item[] = []
 let mine: Day = { usd: 0, input: 0, output: 0 } // this session's share of today
 const alerted = { fiveHour: '', ctx: false, cacheFor: 0 }
+const noSteps = (): Steps => ({ outputs: 0, lastOutput: 0, count: 0, compacted: false })
+let steps = noSteps()
+let samples: Sample[] = []
+// What this conversation has read, edited and output; a compaction starts a new epoch, after which nothing earlier is in the window.
+let epoch = 0
+let seq = 0
+let files: Record<string, FileSeen> = {}
+let outputs: Record<string, number> = {} // tool and result hash -> the epoch it was last seen in
+let rereadCounts: Record<string, number> = {}
+let edited = new Set<string>()
+let calledServers = new Set<string>()
+let mainTurns = 0
+let inWindow: { mcp: McpTool[]; memory: MemoryFile[] } = { mcp: [], memory: [] }
+let advised = new Set<string>()
+
+function forget() {
+  steps = noSteps()
+  samples = []
+  epoch = 0
+  seq = 0
+  files = {}
+  outputs = {}
+  rereadCounts = {}
+  edited = new Set()
+  calledServers = new Set()
+  mainTurns = 0
+  advised = new Set()
+}
 
 export const register: Register = (on, options) => {
   configure(options ?? {})
@@ -135,6 +199,8 @@ export const register: Register = (on, options) => {
     })
     const usage = await $.session.usage().catch(() => null)
     if (usage) takeLimits(usage.rateLimits, usage.cost?.usd)
+    const model = await $.session.model().catch(() => '')
+    if (model && !snap.model) snap = { ...snap, model }
     await readContext($, false).catch(() => {})
     await readToday($).catch(() => {})
     if (e.isInteractive && cfg.alerts) void checkUpdate($).catch(() => {}) // offline or blocked: no toast
@@ -154,19 +220,26 @@ export const register: Register = (on, options) => {
     if (!e.agentId) {
       work = { since: await $.clock.now(), tools: 0, agents: 0 }
       turnItems = []
+      steps = noSteps()
       $.ui.invalidate('ui.render')
     }
     return result
   })
 
-  // Each model request: the cache clock restarts on the main thread; tokens count for today and the hit rate.
+  // Each model request: the cache clock restarts on the main thread; tokens count for today and the hit rate,
+  // and the main thread's input and output are kept for k. An omitted effort is no change, for the same model.
   on('turn.step', async function* ($, e, next) {
+    if (!e.agentId) snap = { ...snap, model: e.model, effort: e.effort ?? (e.model === snap.model ? snap.effort : undefined) }
     const result = yield* next(e)
     const u = result.usage
     if (u) {
       const input = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
-      mine = { ...mine, input: mine.input + input, output: mine.output + (u.output_tokens ?? 0) }
-      if (!e.agentId) snap = { ...snap, cache: hitRate(snap.cache, u) }
+      const output = u.output_tokens ?? 0
+      mine = { ...mine, input: mine.input + input, output: mine.output + output }
+      if (!e.agentId) {
+        snap = { ...snap, cache: hitRate(snap.cache, u) }
+        steps = { ...steps, first: steps.first ?? input, last: input, outputs: steps.outputs + output, lastOutput: output, count: steps.count + 1 }
+      }
     }
     if (!e.agentId && result.stopReason !== null) {
       const now = await $.clock.now() // before the spread, so an update during the await is kept
@@ -176,11 +249,18 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  // Counts every tool call of the turn, and sizes the main thread's results for the largest-items line.
+  // Counts every tool call of the turn; sizes the main thread's results for the largest-items line and
+  // watches them for re-reads, repeats and oversized outputs.
   on('tool.call', async ($, e, next) => {
     const result = await next(e)
     if (work) work = { ...work, tools: work.tools + 1 }
-    if (!(e as { agentId?: string }).agentId) turnItems.push({ label: itemLabel(e as Record<string, unknown>), tokens: estimate(result) })
+    if (!(e as { agentId?: string }).agentId) {
+      const input = e as Record<string, unknown>
+      const label = itemLabel(input)
+      const tokens = estimate(result)
+      turnItems.push({ label, tokens })
+      observe($, input, label, tokens, fnv(resultText(result)))
+    }
     return result
   }).catch(async ($, e, next) => next(e)) // observer only: never stands in the way of a tool
 
@@ -188,23 +268,53 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     if (e.agentId) return result // a subagent's turn fills its own window
     work = undefined
-    snap = { ...snap, top: largest(turnItems, TOP) }
+    const sample = turnSample(steps, turnItems.reduce((a, i) => a + i.tokens, 0))
+    if (sample) samples = [...samples, sample].slice(-SAMPLES)
+    mainTurns++
+    snap = { ...snap, top: largest(turnItems, TOP), k: calibrate(samples) ?? snap.k }
     await readContext($, true).catch(() => {})
+    if (mainTurns >= UNUSED_AFTER_TURNS) for (const u of unusedServers(inWindow.mcp, calledServers)) adviseOnce($, { key: `mcp:${u.server}`, text: `MCP 서버 ${u.server}의 도구 ≈${short(u.tokens)}가 컨텍스트에 있지만 이번 세션에서 쓰지 않았습니다 · /mcp에서 끌 수 있습니다` })
+    for (const m of inWindow.memory) if (m.tokens >= LARGE_MEMORY) adviseOnce($, { key: `memory:${m.path}`, text: `큰 메모리 파일 ${fileName(m.path)} ≈${short(m.tokens)} · 요청마다 함께 보내집니다` })
     await saveToday($).catch(() => {})
     // cache-tax registers /keepwarm at its own session start; by the first turn it is there or not
     if (!hasKeepwarm) hasKeepwarm = JSON.stringify(await $.command.list().catch(() => [])).includes('"keepwarm"')
     return result
   })
 
+  // A compaction empties the window without a turn ending: what was read before is gone, and the summary
+  // may no longer name the files this session edited.
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
-    void readContext($, false).catch(() => {}) // a compaction empties the window without a turn ending
+    if (!e.agentId && e.trigger !== 'precompute' && typeof result.skip !== 'string') {
+      epoch++
+      steps = { ...steps, compacted: true }
+      snap = { ...snap, compaction: { before: result.tokensBefore, after: result.tokensAfter, lost: lostFiles([...edited], result.messages) } }
+    }
+    void readContext($, false).catch(() => {})
     return result
   }).catch(async ($, e, next) => next(e)) // observer only: never stands in the way of a compaction
 
+  // A switch shows at once; the effort is known again at the next request.
+  on('classic.PostModelSwitch', async ($, e, next) => {
+    const result = await next(e)
+    snap = { ...snap, model: e.to_model, effort: undefined }
+    $.ui.invalidate('ui.render')
+    return result
+  })
+
+  on('command.run', { command: 'effort' }, async ($, e, next) => {
+    const result = await next(e)
+    snap = { ...snap, effort: undefined }
+    $.ui.invalidate('ui.render')
+    return result
+  })
+
   // A /clear or a resume leaves the old conversation, and its cache, behind.
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear' || e.reason === 'resume') snap = { ...empty(), limits: snap.limits, costUsd: snap.costUsd, today: snap.today }
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      snap = { ...empty(), limits: snap.limits, costUsd: snap.costUsd, today: snap.today, model: snap.model, effort: snap.effort }
+      forget()
+    }
     return next(e)
   })
 
@@ -224,11 +334,11 @@ export const register: Register = (on, options) => {
         $.command.run({ command: 'compact' }).catch(() => $.ui.toast('/compact를 실행하지 못했습니다'))
       },
       handoff: () => {
-        $.prompt.submit({ text: handoffText(cfg.handoffDir), asUser: true }).catch(() => $.ui.toast('Claude가 작업 중이라 보내지 못했습니다'))
+        $.prompt.submit({ text: handoffText(cfg.handoffDir, snap.compaction?.lost), asUser: true }).catch(() => $.ui.toast('Claude가 작업 중이라 보내지 못했습니다'))
       },
       toggle: () => {
         showDetail = !showDetail
-        if (showDetail) void readToday($).then(() => $.ui.invalidate('ui.render'))
+        if (showDetail) void readToday($).then(() => $.ui.invalidate('ui.render')).catch(() => {})
         $.ui.invalidate('ui.render')
       },
     }
@@ -256,6 +366,7 @@ async function readContext($: EngineInterface, isTurn: boolean) {
   const delta = isTurn && snap.tokens !== undefined ? tokens - snap.tokens : undefined
   const deltas = delta === undefined ? snap.deltas : [...snap.deltas, delta].slice(-DELTAS)
   const slices = b ? b.categories.filter(x => x.kind === 'used' && x.tokens > 0).map(x => ({ name: x.name.toLowerCase(), tokens: x.tokens })) : snap.slices
+  if (b) inWindow = { mcp: b.mcpTools ?? [], memory: b.memoryFiles ?? [] }
   snap = { ...snap, tokens, window, compactsAt, deltas, slices }
   $.ui.invalidate('ui.render')
 }
@@ -346,6 +457,51 @@ function alert($: EngineInterface, now: number) {
   }
 }
 
+// One main-thread tool call: edits mark their file; a Read is classified against the last read of the same
+// range; any other output that came back unchanged in this epoch is a repeat. Oversized outputs advise once.
+function observe($: EngineInterface, e: Record<string, unknown>, label: string, tokens: number, hash: number) {
+  seq++
+  const tool = String(e.tool ?? '')
+  const path = typeof e.file_path === 'string' ? e.file_path : typeof e.notebook_path === 'string' ? e.notebook_path : ''
+  const w: Waste = snap.waste ?? { rereads: 0, rereadTokens: 0, repeats: 0, repeatTokens: 0 }
+  if (tool.startsWith('mcp__')) calledServers.add(serverKey(tool.split('__')[1] ?? ''))
+  if (EDIT_TOOLS.has(tool) && path) {
+    edited.add(path)
+    files[path] = { ranges: files[path]?.ranges ?? {}, editedAt: seq }
+    return
+  }
+  if (tool === 'Read' && path) {
+    const range = `${e.offset ?? ''}:${e.limit ?? ''}`
+    const f = files[path] ?? { ranges: {}, editedAt: 0 }
+    const kind = readKind(f.ranges[range], f.editedAt, epoch, hash)
+    files[path] = { ...f, ranges: { ...f.ranges, [range]: { hash, epoch, seq } } }
+    if (kind === 'unchanged') {
+      const count = (rereadCounts[path] ?? 0) + 1
+      rereadCounts[path] = count
+      const top = w.rereadTop && w.rereadTop.count >= count && w.rereadTop.name !== fileName(path) ? w.rereadTop : { name: fileName(path), count }
+      snap = { ...snap, waste: { ...w, rereads: w.rereads + 1, rereadTokens: w.rereadTokens + tokens, rereadTop: top } }
+      if (w.rereads + 1 >= 3) adviseOnce($, { key: 'reread', text: `변경 없는 재읽기 ${w.rereads + 1}회 ≈${short(scaled(w.rereadTokens + tokens))} · 이미 읽은 내용은 다시 읽지 않아도 됩니다` })
+    }
+  } else if (tokens >= REPEAT_MIN) {
+    const key = `${tool}:${hash}`
+    if (outputs[key] === epoch) snap = { ...snap, waste: { ...w, repeats: w.repeats + 1, repeatTokens: w.repeatTokens + tokens, repeatTop: label } }
+    outputs[key] = epoch
+  }
+  const a = advice(e, label, scaled(tokens))
+  if (a) adviseOnce($, a)
+}
+
+function scaled(tokens: number) {
+  return Math.round(tokens * (snap.k ?? 1))
+}
+
+// A tip toast, once per key a session, when alerts are on.
+function adviseOnce($: EngineInterface, a: Advice) {
+  if (!cfg.alerts || advised.has(a.key)) return
+  advised.add(a.key)
+  $.ui.toast(a.text, { timeoutMs: 10_000 })
+}
+
 function ctxLevel(s: Snapshot) {
   if (s.tokens === undefined || !s.window) return undefined
   return (s.tokens / (s.compactsAt || s.window)) * 100
@@ -415,8 +571,27 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
       v.detail.push({ label: 'context', text: `compact까지 ${short(Math.max(0, s.compactsAt - s.tokens))}${growth ? ` · 최근 평균 +${short(Math.round(growth))}/턴` : ''}` })
     }
   }
+  const adj = (n: number) => short(Math.round(n * (s.k ?? 1)))
   if (s.top.length) {
-    v.detail.push({ label: '지난 턴', text: `큰 결과: ${s.top.map(i => `${i.label} ${short(i.tokens)}`).join(' · ')}` })
+    v.detail.push({ label: '지난 턴', text: `큰 결과: ${s.top.map(i => `${i.label} ≈${adj(i.tokens)}`).join(' · ')}${s.k === undefined ? '' : ` · 추정 ×${s.k.toFixed(2)}`}` })
+  }
+  const w = s.waste
+  if (w && (w.rereads || w.repeats)) {
+    const parts: string[] = []
+    if (w.rereads) parts.push(`변경 없는 재읽기 ${w.rereads}회 ≈${adj(w.rereadTokens)}${w.rereadTop ? ` (${w.rereadTop.name} ${w.rereadTop.count}회)` : ''}`)
+    if (w.repeats) parts.push(`같은 출력 ${w.repeats}회 ≈${adj(w.repeatTokens)}${w.repeatTop ? ` (${w.repeatTop})` : ''}`)
+    v.detail.push({ label: '중복', text: parts.join(' · ') })
+  }
+  if (s.compaction) {
+    const c = s.compaction
+    const size = c.before && c.after ? `${short(c.before)} → ${short(c.after)}` : '완료'
+    const names = c.lost.map(fileName)
+    const lost = names.length ? ` · 요약에 빠진 편집 파일 ${names.length}개: ${names.slice(0, 3).join(', ')}${names.length > 3 ? ' 외' : ''}` : ''
+    v.detail.push({ label: 'compact', text: `${size}${lost}` })
+  }
+  if (s.model) {
+    const name = modelName(s.model)
+    v.model = { name, effort: s.effort === undefined ? undefined : String(s.effort), color: FAMILY[name.split(' ')[0]!.toLowerCase()] ?? C.marker }
   }
   if (s.lastRequestAt !== undefined) {
     const expires = s.lastRequestAt + cfg.cacheTtlMs
@@ -439,10 +614,11 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
   return v
 }
 
-// Drops the extras, then the cost, then 7d, until the line fits.
+// Drops the extras, then the model chip, then the cost, then 7d, until the line fits.
 export function fit(v: View, columns: number): View {
   const steps: ((x: View) => View)[] = [
     x => (x.ctx ? { ...x, ctx: { ...x.ctx, turns: undefined, delta: undefined } } : x),
+    x => ({ ...x, model: undefined }),
     x => (x.plan ? { ...x, plan: { ...x.plan, cost: undefined } } : x),
     x => (x.plan ? { ...x, plan: { ...x.plan, seven: undefined } } : x),
   ]
@@ -470,6 +646,7 @@ export function text(v: View): string {
     const k = v.cache
     chips.push(`[❄ ${k.text}${k.rewrite ? ` ${k.rewrite}` : ''}${k.offerKeep ? ' (유지 90분)' : ''}]`)
   }
+  if (v.model) chips.push(`[${v.model.name}${v.model.effort ? ` · ${v.model.effort}` : ''}]`)
   return chips.join('  ')
 }
 
@@ -526,6 +703,11 @@ function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working: (Wor
     if (k.rewrite) kids.push(dim(k.rewrite))
     if (k.offerKeep && !isYielding) kids.push(<Button key="token-gauge-keep" label="유지 90분" onPress={act.keepWarm} />)
     chips.push(chip('token-gauge-cache', k.color, kids))
+  }
+  if (v.model) {
+    const kids: unknown[] = [<Text>{v.model.name}</Text>]
+    if (v.model.effort) kids.push(dim(`· ${v.model.effort}`))
+    chips.push(chip('token-gauge-model', v.model.color, kids))
   }
   if (working) {
     const kids: unknown[] = [<Text color={C.yellow}>⏳</Text>, num(mmss(working.elapsed)), dim(`· 도구 ${working.tools}`)]
@@ -688,6 +870,94 @@ export function estimate(result: unknown) {
 
 export function largest(items: Item[], n: number) {
   return [...items].sort((a, b) => b.tokens - a.tokens).slice(0, n).filter(i => i.tokens >= 500)
+}
+
+// What the tool returned, for hashing: the result itself, not the envelope around it.
+function resultText(result: unknown) {
+  const r = result as { result?: unknown; text?: unknown } | undefined
+  try {
+    return JSON.stringify(r?.result ?? r?.text ?? r) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+// FNV-1a, 32 bits: enough to tell two outputs apart within a session.
+export function fnv(text: string) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return h >>> 0
+}
+
+// Between a turn's first and last request the input grew by the outputs before the last and the tool results;
+// a turn with one request, or a compaction in it, measures nothing.
+export function turnSample(t: Steps, est: number): Sample | undefined {
+  if (t.compacted || t.count < 2 || t.first === undefined || t.last === undefined) return undefined
+  return { growth: t.last - t.first - (t.outputs - t.lastOutput), est }
+}
+
+// k over the kept turns, summed so a large turn weighs more: within 0.5 to 2, undefined with nothing to go on.
+export function calibrate(list: readonly Sample[]) {
+  const ok = list.filter(x => x.est >= MIN_SAMPLE_EST && x.growth > 0)
+  const est = ok.reduce((a, x) => a + x.est, 0)
+  if (!est) return undefined
+  return Math.min(K_MAX, Math.max(K_MIN, ok.reduce((a, x) => a + x.growth, 0) / est))
+}
+
+// A Read against the last read of the same range of the same file; only 'unchanged' is waste.
+export function readKind(prior: Seen | undefined, editedAt: number, now: number, hash: number): ReadKind {
+  if (!prior) return 'first'
+  if (editedAt > prior.seq) return 'after-edit'
+  if (prior.epoch !== now) return 'after-compaction'
+  if (prior.hash !== hash) return 'changed'
+  return 'unchanged'
+}
+
+// Edited files the compacted conversation no longer names, by file name, in its text or its tool calls.
+export function lostFiles(paths: readonly string[], messages: readonly { text: string; toolUses?: readonly unknown[] }[]) {
+  const kept = messages.map(m => `${m.text}\n${JSON.stringify(m.toolUses ?? [])}`).join('\n')
+  return paths.filter(p => !kept.includes(fileName(p)))
+}
+
+// A tip for an output that cost more than it had to; tokens already scaled.
+export function advice(e: Record<string, unknown>, label: string, tokens: number): Advice | undefined {
+  const tool = String(e.tool ?? '')
+  if (tool === 'Read' && e.offset === undefined && e.limit === undefined && tokens >= LARGE_READ) {
+    return { key: 'large-read', text: `큰 파일 통째 읽기: ${label} ≈${short(tokens)} · offset/limit로 필요한 부분만 읽으면 줄어듭니다` }
+  }
+  if (tool === 'Bash' && tokens >= LARGE_OUTPUT) return { key: 'large-bash', text: `긴 명령 출력: ${label} ≈${short(tokens)} · head/tail/grep으로 줄이면 됩니다` }
+  if ((tool === 'Agent' || tool === 'Task') && tokens >= LARGE_OUTPUT) return { key: 'large-agent', text: `긴 subagent 결과: ${label} ≈${short(tokens)} · 요약만 돌려 달라고 하면 줄어듭니다` }
+  return undefined
+}
+
+// MCP servers whose loaded tools hold a sizeable share of the window and that this session never called.
+export function unusedServers(tools: readonly McpTool[], called: ReadonlySet<string>) {
+  const by: Record<string, number> = {}
+  for (const t of tools) if (t.isLoaded) by[t.serverName] = (by[t.serverName] ?? 0) + t.tokens
+  return Object.entries(by)
+    .filter(([server, tokens]) => tokens >= UNUSED_MCP && !called.has(serverKey(server)))
+    .map(([server, tokens]) => ({ server, tokens }))
+    .sort((a, b) => b.tokens - a.tokens)
+}
+
+// mcp__claude_ai_Gmail__x and "claude.ai Gmail" name the same server.
+function serverKey(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+// claude-opus-5-5 → Opus 5.5, claude-haiku-4-5-20251001 → Haiku 4.5, claude-sonnet-4-6[1m] → Sonnet 4.6 1M.
+export function modelName(id: string) {
+  const m = /(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2})(?!\d))?/i.exec(id)
+  const wide = /\[1m\]/i.test(id) ? ' 1M' : ''
+  if (!m) return id.replace(/^claude-/, '').slice(0, 16)
+  return `${m[1]![0]!.toUpperCase()}${m[1]!.slice(1).toLowerCase()} ${m[2]}${m[3] ? `.${m[3]}` : ''}${wide}`
+}
+
+function fileName(p: string) {
+  return p.split(/[\\/]/).pop() || p
 }
 
 // The share of input read from the cache; a request that wrote more than it read re-cached the prefix.
