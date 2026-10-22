@@ -28,6 +28,16 @@ const calm: Snapshot = {
 }
 const detail = (s: Snapshot, label: string) => view(s, NOW, true).detail.find(d => d.label === label)?.text
 
+// The engine beneath the mod in a UI test: a session, its usage and the engine's own drawing at each site.
+function engine(on: any) {
+  mock.clock(on, { now: NOW })
+  on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+  on('session.usage', () => ({ value: { startedAt: NOW, context: { tokens: 113_000, window: 1_000_000 }, rateLimits: calm.limits, cost: { usd: 1.27 } } }))
+  // the question dialog is core's own node (it must stand once); elsewhere a text names the site
+  on('ui.render', ($$: any, e: any) => (e.component === 'AskUserQuestion' ? { type: 'engine', ref: 0 } : $$.ui.resolve(e).Text({ children: `engine ${e.component}` })))
+}
+const QUESTION = { tool: 'AskUserQuestion', questions: [{ question: '어느 쪽?', header: '선택', multiSelect: false, options: [{ label: 'A', description: 'a' }, { label: 'B', description: 'b' }] }] }
+
 describe('token-gauge', () => {
   test('calm: three chips, forecast clear, cache blue', () => {
     const v = view(calm, NOW, true)
@@ -116,7 +126,8 @@ describe('token-gauge', () => {
   }
 
   test('install options', () => {
-    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '' })
+    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', below: false })
+    expect(configure({ desktopPlace: 'below' }).below).toBe(true)
     expect(configure({ actionsAt: 200, handoffDir: '  ' })).toMatchObject({ actionsAt: 70, handoffDir: '' }) // odd values keep defaults
     expect(handoffText('')).toContain('파일은 만들지 말고 이 답변에') // no folder: the memo comes as the answer
     configure({ cacheTtl: '5m', actionsAt: 80, showCost: false, handoffDir: 'notes/' })
@@ -298,5 +309,33 @@ describe('token-gauge', () => {
     expect(await ui.find({ type: 'Text', text: /^변경 없는 재읽기 1회 ≈\d+ \(a\.ts 1회\) · 같은 출력 1회 ≈10k \(Bash make log\)$/ })).toBeDefined()
     expect(shown.filter(t => t.startsWith('긴 명령 출력: Bash make log')).length).toBe(1)
     await ui.unmount()
+  })
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    test(`a question dialog keeps the chips above it, text bars and no buttons (${surface})`, async ($: any, on: any) => {
+      engine(on)
+      await $.session.start({ surface, isInteractive: false, cwd: '/work' })
+      const ui = await $.ui.mount({ plugin: 'token-gauge', surface, component: 'AskUserQuestion', props: QUESTION }) // validated: the node once, within the rows
+      expect(await ui.find({ type: 'Text', text: /113k ?\/ ?1M/ })).toBeDefined() // terminal: one line; desktop: the chips
+      expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+      expect(await ui.find({ type: 'Button' })).toBeUndefined()
+      await ui.unmount()
+    })
+  }
+
+  test('desktopPlace below: the chips leave the band for the hint line on the desktop', { options: { desktopPlace: 'below' } }, async ($: any, on: any) => {
+    engine(on)
+    await $.session.start({ surface: 'desktop', isInteractive: false, cwd: '/work' })
+    const above = await $.ui.mount({ plugin: 'token-gauge', surface: 'desktop', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 } })
+    expect(await above.find({ type: 'Text', text: '☀' })).toBeUndefined()
+    await above.unmount()
+    const below = await $.ui.mount({ plugin: 'token-gauge', surface: 'desktop', component: 'PromptHint', props: { isDraft: false, isWorking: false, hint: '? for shortcuts' } })
+    expect(await below.find({ type: 'Text', text: '☀' })).toBeDefined()
+    expect(await below.find({ type: 'Text', text: /engine PromptHint/ })).toBeDefined() // the engine's hint stays, above the chips
+    expect(await below.find({ type: 'Button', label: '▾ 상세' })).toBeDefined()
+    await below.unmount()
+    const terminal = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'PromptHint', props: { isDraft: false, isWorking: false, hint: '? for shortcuts' } })
+    expect(await terminal.find({ type: 'Text', text: '☀' })).toBeUndefined() // the terminal keeps the band above
+    await terminal.unmount()
   })
 })

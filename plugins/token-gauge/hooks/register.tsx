@@ -32,11 +32,14 @@ const UNUSED_MCP = 5_000
 const UNUSED_AFTER_TURNS = 10
 const LARGE_MEMORY = 8_000
 const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit'])
+const QUESTION_COLUMNS = 100 // a site with no measured width
+const QUESTION_LINE = 80 // the terminal's line above a question: two of its 40-column rows
 
 // The userConfig options in plugin.json, asked at install and changed with /plugin configure or /config.
 // handoffDir '' asks for the handoff memo in the answer; a folder asks for a PROMPT file there.
-export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string }
-const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '' }
+// below: on the desktop, the chips go under the prompt (desktopPlace 'below') rather than above it.
+export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string; below: boolean }
+const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', below: false }
 let cfg = DEFAULTS
 
 // Options as saved, checked: a missing or odd value keeps its default.
@@ -49,6 +52,7 @@ export function configure(o: Record<string, unknown>): Config {
     showCost: o.showCost !== false,
     alerts: o.alerts !== false,
     handoffDir: dir,
+    below: o.desktopPlace === 'below',
   }
   return cfg
 }
@@ -318,35 +322,65 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // The band above the prompt; on the desktop with desktopPlace 'below', under the prompt instead.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const rest = await next(e) // what other mods and Claude Code draw here stays
-    const now = await $.clock.now()
-    const v = fit(view(snap, now, hasKeepwarm), e.props.bodyColumns - 2)
-    if (!v.plan && !v.ctx && !v.cache) return rest
-    const act = {
-      keepWarm: () => {
-        $.command
-          .run({ command: 'keepwarm', args: '90m' })
-          .then(() => $.ui.toast('cache-tax: 90분 동안 캐시를 유지합니다 · /keepwarm off로 취소'))
-          .catch(() => $.ui.toast('cache-tax의 /keepwarm을 실행하지 못했습니다'))
-      },
-      compact: () => {
-        $.command.run({ command: 'compact' }).catch(() => $.ui.toast('/compact를 실행하지 못했습니다'))
-      },
-      handoff: () => {
-        $.prompt.submit({ text: handoffText(cfg.handoffDir, snap.compaction?.lost), asUser: true }).catch(() => $.ui.toast('Claude가 작업 중이라 보내지 못했습니다'))
-      },
-      toggle: () => {
-        showDetail = !showDetail
-        if (showDetail) void readToday($).then(() => $.ui.invalidate('ui.render')).catch(() => {})
-        $.ui.invalidate('ui.render')
-      },
-    }
-    const working = e.props.isWorking && work ? { ...work, elapsed: now - work.since } : undefined
+    if (e.surface === 'desktop' && cfg.below) return rest
     // A survey (a question in the band) keeps the chip row, without buttons or the detail panel, so the question keeps the room
-    const band = draw($.ui.resolve(e), v, e.surface === 'terminal', act, working, e.props.hasSurvey)
+    const band = await bandTree($, $.ui.resolve(e), e.surface === 'terminal', e.props.bodyColumns - 2, e.props.isWorking ? 'working' : 'idle', e.props.hasSurvey)
+    if (!band) return rest
     return { type: 'Box', props: { flexDirection: 'column' }, children: rest ? [band, rest] : [band] }
   })
+
+  // Under the prompt, after the engine's hint line: the desktop's empty space below the input.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    const rest = await next(e)
+    if (e.surface !== 'desktop' || !cfg.below) return rest
+    const band = await bandTree($, $.ui.resolve(e), false, (e.viewport?.columns ?? QUESTION_COLUMNS) - 2, e.props.isWorking ? 'working' : 'idle', false)
+    if (!band) return rest
+    return { type: 'Box', props: { flexDirection: 'column' }, children: rest ? [rest, band] : [band] }
+  })
+
+  // A question dialog takes the prompt's place, the band with it: the chips stand above the question.
+  // The site takes no size, so bars are text; no buttons, no detail panel and no ⏳ chip (the turn only waits).
+  // The terminal allows 12 rows around the dialog, so there the chips are one line of text.
+  on('ui.render', { component: 'AskUserQuestion' }, async ($, e, next) => {
+    const rest = await next(e)
+    if (!rest) return rest // the engine's node stands once, nothing below it
+    const columns = (e.viewport?.columns ?? QUESTION_COLUMNS) - 2
+    const ui = $.ui.resolve(e)
+    const band = e.surface === 'terminal' ? questionLine(ui, fit(view(snap, await $.clock.now(), false), QUESTION_LINE)) : await bandTree($, ui, true, columns, 'question', true)
+    if (!band) return rest
+    return { type: 'Box', props: { flexDirection: 'column' }, children: [band, rest] }
+  }).catch(async ($, e, next) => next(e)) // never in the way of a question
+}
+
+// The chip row (and the detail panel when open) for one site; undefined with nothing to show yet.
+async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, columns: number, state: 'idle' | 'working' | 'question', isYielding: boolean) {
+  const now = await $.clock.now()
+  const v = fit(view(snap, now, hasKeepwarm), columns)
+  if (!v.plan && !v.ctx && !v.cache) return undefined
+  const act = {
+    keepWarm: () => {
+      $.command
+        .run({ command: 'keepwarm', args: '90m' })
+        .then(() => $.ui.toast('cache-tax: 90분 동안 캐시를 유지합니다 · /keepwarm off로 취소'))
+        .catch(() => $.ui.toast('cache-tax의 /keepwarm을 실행하지 못했습니다'))
+    },
+    compact: () => {
+      $.command.run({ command: 'compact' }).catch(() => $.ui.toast('/compact를 실행하지 못했습니다'))
+    },
+    handoff: () => {
+      $.prompt.submit({ text: handoffText(cfg.handoffDir, snap.compaction?.lost), asUser: true }).catch(() => $.ui.toast('Claude가 작업 중이라 보내지 못했습니다'))
+    },
+    toggle: () => {
+      showDetail = !showDetail
+      if (showDetail) void readToday($).then(() => $.ui.invalidate('ui.render')).catch(() => {})
+      $.ui.invalidate('ui.render')
+    },
+  }
+  const working = state === 'working' && work ? { ...work, elapsed: now - work.since } : undefined
+  return draw(ui, v, textBars, act, working, isYielding)
 }
 
 function takeLimits(rateLimits: readonly Limit[] | undefined, costUsd: number | undefined) {
@@ -775,6 +809,41 @@ function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working: (Wor
       {rows}
     </Box>
   )
+}
+
+// The chips as one line of colored text, for the terminal's few rows above a question dialog.
+function questionLine(ui: any, v: View) {
+  const { Text } = ui
+  const parts: unknown[] = []
+  const dim = (s: string) => parts.push(<Text dimColor>{s}</Text>)
+  const num = (s: string, color?: string) => parts.push(<Text color={color}>{s}</Text>)
+  const gap = () => parts.length && dim('  ')
+  if (v.plan?.five) {
+    dim('5h ')
+    num(`${v.plan.five.percent}%`, v.plan.five.color)
+    if (v.plan.five.reset) dim(` ↻${v.plan.five.reset}`)
+  }
+  if (v.plan?.seven) {
+    dim(' · 7d ')
+    num(`${v.plan.seven.percent}%`, v.plan.seven.color)
+  }
+  if (v.ctx) {
+    gap()
+    num(`${v.ctx.icon} `, v.ctx.color)
+    num(`${v.ctx.used}/${v.ctx.window} `)
+    num(`${v.ctx.percent}%`, v.ctx.color)
+  }
+  if (v.cache) {
+    gap()
+    num('❄ ', v.cache.color)
+    num(v.cache.text, v.cache.isCold ? v.cache.color : undefined)
+  }
+  if (v.model) {
+    gap()
+    num(v.model.name, v.model.color)
+    if (v.model.effort) dim(` · ${v.model.effort}`)
+  }
+  return parts.length ? <Text>{parts}</Text> : undefined
 }
 
 // The terminal's breakdown bar as runs of cells: each category its share of `n`, at least one cell, then free space (no color).
