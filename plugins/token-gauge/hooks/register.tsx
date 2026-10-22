@@ -33,13 +33,17 @@ const UNUSED_AFTER_TURNS = 10
 const LARGE_MEMORY = 8_000
 const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit'])
 const QUESTION_COLUMNS = 100 // a site with no measured width
+const REFRESH_TICKS = 3 // seconds between context reads while Claude works
+const PERSON = new Set(['composer', 'bridge']) // prompt origins someone is there to ask about
+const SEND_AGAIN = '다시 보내기'
+const PUT_BACK = '취소'
 const QUESTION_LINE = 80 // the terminal's line above a question: two of its 40-column rows
 
 // The userConfig options in plugin.json, asked at install and changed with /plugin configure or /config.
 // handoffDir '' asks for the handoff memo in the answer; a folder asks for a PROMPT file there.
-// below: on the desktop, the chips go under the prompt (desktopPlace 'below') rather than above it.
+// below: on the desktop, the chips go under the prompt (desktopPlace 'below', the default) rather than above it.
 export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string; below: boolean }
-const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', below: false }
+const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', below: true }
 let cfg = DEFAULTS
 
 // Options as saved, checked: a missing or odd value keeps its default.
@@ -52,7 +56,7 @@ export function configure(o: Record<string, unknown>): Config {
     showCost: o.showCost !== false,
     alerts: o.alerts !== false,
     handoffDir: dir,
-    below: o.desktopPlace === 'below',
+    below: o.desktopPlace !== 'above',
   }
   return cfg
 }
@@ -150,6 +154,7 @@ let hasKeepwarm = false
 let showDetail = false
 let work: Work | undefined // the main-thread turn in progress
 let turnItems: Item[] = []
+let turnBase: number | undefined // the context when the main-thread turn began, for its ▲ growth
 let mine: Day = { usd: 0, input: 0, output: 0 } // this session's share of today
 const alerted = { fiveHour: '', ctx: false, cacheFor: 0 }
 const noSteps = (): Steps => ({ outputs: 0, lastOutput: 0, count: 0, compacted: false })
@@ -168,6 +173,7 @@ let inWindow: { mcp: McpTool[]; memory: MemoryFile[] } = { mcp: [], memory: [] }
 let advised = new Set<string>()
 
 function forget() {
+  turnBase = undefined
   steps = noSteps()
   samples = []
   epoch = 0
@@ -196,6 +202,8 @@ export const register: Register = (on, options) => {
             const agents = await $.agent.list().catch(() => [])
             work = work && { ...work, agents: agents.filter(a => a.status === 'running').length }
           }
+          // while Claude works the context grows request by request and result by result: read it again
+          if (work && tick % REFRESH_TICKS === 0) await readContext($, false).catch(() => {})
           if (work || shouldRedraw(snap, now)) $.ui.invalidate('ui.render')
           alert($, now)
         })
@@ -224,6 +232,7 @@ export const register: Register = (on, options) => {
     if (!e.agentId) {
       work = { since: await $.clock.now(), tools: 0, agents: 0 }
       turnItems = []
+      turnBase = snap.tokens
       steps = noSteps()
       $.ui.invalidate('ui.render')
     }
@@ -249,6 +258,7 @@ export const register: Register = (on, options) => {
       const now = await $.clock.now() // before the spread, so an update during the await is kept
       snap = { ...snap, lastRequestAt: now }
       $.ui.invalidate('ui.render')
+      if (work) void readContext($, false).catch(() => {}) // each request's usage, not only the turn's end
     }
     return result
   })
@@ -305,6 +315,17 @@ export const register: Register = (on, options) => {
     $.ui.invalidate('ui.render')
     return result
   })
+
+  // A prompt the person sent that another plugin's hook dropped (cache-tax on a cold cache, say): a question card
+  // offers to send it again or to put it back in the box. Asked after the drop is returned, holding nothing up.
+  on('prompt.submit', async ($, e, next) => {
+    const result = await next(e)
+    if (result.drop !== undefined && !e.command && !e.isMeta && PERSON.has(e.origin.kind)) {
+      const by = droppedBy(next.trace)
+      if (by) void askDropped($, e.text, by, result.drop).catch(() => {})
+    }
+    return result
+  }).catch(async ($, e, next) => next(e)) // observer only: never stands in the way of a prompt
 
   on('command.run', { command: 'effort' }, async ($, e, next) => {
     const result = await next(e)
@@ -397,7 +418,10 @@ async function readContext($: EngineInterface, isTurn: boolean) {
   if (!window) return
   const tokens = c.tokens ?? b?.totalTokens ?? 0
   const compactsAt = b?.isAutoCompactEnabled ? b.autoCompactThreshold : undefined
-  const delta = isTurn && snap.tokens !== undefined ? tokens - snap.tokens : undefined
+  // a turn's growth from where it began: the reads during it moved snap.tokens already
+  const base = turnBase ?? snap.tokens
+  const delta = isTurn && base !== undefined ? tokens - base : undefined
+  if (isTurn) turnBase = undefined
   const deltas = delta === undefined ? snap.deltas : [...snap.deltas, delta].slice(-DELTAS)
   const slices = b ? b.categories.filter(x => x.kind === 'used' && x.tokens > 0).map(x => ({ name: x.name.toLowerCase(), tokens: x.tokens })) : snap.slices
   if (b) inWindow = { mcp: b.mcpTools ?? [], memory: b.memoryFiles ?? [] }
@@ -527,6 +551,26 @@ function observe($: EngineInterface, e: Record<string, unknown>, label: string, 
 
 function scaled(tokens: number) {
   return Math.round(tokens * (snap.k ?? 1))
+}
+
+// Send again as the plugin's own prompt, which cache-tax lets through: so the cache hold its drop promised is
+// asked of /keepwarm here. Anything else (cancel, a dismissed card, text typed under Other) goes back in the box.
+async function askDropped($: EngineInterface, text: string, by: string, reason: string) {
+  const why = reason.startsWith(`${by}:`) ? reason.slice(by.length + 1).trimStart() : reason // the card names the plugin already
+  const question = `${by} 훅이 프롬프트를 막았습니다. ${why.length > 600 ? `${why.slice(0, 599)}…` : why} ${PUT_BACK}하면 입력창에 되돌립니다. 그대로 다시 보낼까요?`
+  const answer = await $.ui.ask(question, { options: [SEND_AGAIN, PUT_BACK], header: '프롬프트 차단' }).catch(() => undefined)
+  if (answer === SEND_AGAIN) {
+    const sent = await $.prompt.submit({ text, asUser: true })
+    if (sent.drop !== undefined) {
+      $.ui.toast(`다시 보낸 프롬프트도 막혔습니다: ${sent.drop}`)
+      await $.prompt.fill({ text, mode: 'replace' })
+      return
+    }
+    const hold = keepwarmHold(reason)
+    if (hold && JSON.stringify(await $.command.list().catch(() => [])).includes('"keepwarm"')) await $.command.run({ command: 'keepwarm', args: hold }).catch(() => {})
+    return
+  }
+  await $.prompt.fill({ text: answer && answer !== PUT_BACK ? answer : text, mode: 'replace' })
 }
 
 // A tip toast, once per key a session, when alerts are on.
@@ -1000,6 +1044,18 @@ export function advice(e: Record<string, unknown>, label: string, tokens: number
   if (tool === 'Bash' && tokens >= LARGE_OUTPUT) return { key: 'large-bash', text: `긴 명령 출력: ${label} ≈${short(tokens)} · head/tail/grep으로 줄이면 됩니다` }
   if ((tool === 'Agent' || tool === 'Task') && tokens >= LARGE_OUTPUT) return { key: 'large-agent', text: `긴 subagent 결과: ${label} ≈${short(tokens)} · 요약만 돌려 달라고 하면 줄어듭니다` }
   return undefined
+}
+
+// The plugin whose own hook answered with the drop, from next.trace; undefined for the engine's own drop
+// (a settings hook's block, a Stop) or a trace that does not say.
+export function droppedBy(trace: readonly { plugin: string; outcome: string; returned?: unknown }[]) {
+  const entry = trace.find(t => t.outcome === 'returned' && (t.returned as { drop?: unknown } | undefined)?.drop !== undefined)
+  return entry && entry.plugin !== 'engine' ? entry.plugin : undefined
+}
+
+// The hold cache-tax's drop promises ("keepwarm will then hold the cache for 3h00m"), in the form /keepwarm takes.
+export function keepwarmHold(reason: string) {
+  return /hold the cache for (\d+h\d{2}m|\d+m)\b/.exec(reason)?.[1]
 }
 
 // MCP servers whose loaded tools hold a sizeable share of the window and that this session never called.

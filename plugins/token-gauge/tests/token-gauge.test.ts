@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { advice, calibrate, configure, fit, fnv, forecastText, handoffText, hitRate, isNewer, itemLabel, largest, latestVersion, lostFiles, modelName, pace, readKind, redact, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
+import { advice, calibrate, configure, droppedBy, fit, fnv, forecastText, handoffText, hitRate, isNewer, itemLabel, keepwarmHold, largest, latestVersion, lostFiles, modelName, pace, readKind, redact, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
 import type { Snapshot } from '../hooks/register'
 
 const NOW = Date.parse('2026-10-22T00:00:00Z')
@@ -88,7 +88,7 @@ describe('token-gauge', () => {
   })
 
   for (const [surface, hasSurvey] of [['terminal', false], ['desktop', false], ['desktop', true]] as const) {
-    test(`mounts the band (${surface}${hasSurvey ? ', under a survey' : ''})`, async ($: any, on: any) => {
+    test(`mounts the band (${surface}${hasSurvey ? ', under a survey' : ''})`, { options: { desktopPlace: 'above' } }, async ($: any, on: any) => {
       mock.clock(on, { now: NOW })
       on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
       on('session.usage', () => ({
@@ -126,8 +126,8 @@ describe('token-gauge', () => {
   }
 
   test('install options', () => {
-    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', below: false })
-    expect(configure({ desktopPlace: 'below' }).below).toBe(true)
+    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', below: true }) // the desktop's chips under the prompt by default
+    expect(configure({ desktopPlace: 'above' }).below).toBe(false)
     expect(configure({ actionsAt: 200, handoffDir: '  ' })).toMatchObject({ actionsAt: 70, handoffDir: '' }) // odd values keep defaults
     expect(handoffText('')).toContain('파일은 만들지 말고 이 답변에') // no folder: the memo comes as the answer
     configure({ cacheTtl: '5m', actionsAt: 80, showCost: false, handoffDir: 'notes/' })
@@ -323,7 +323,7 @@ describe('token-gauge', () => {
     })
   }
 
-  test('desktopPlace below: the chips leave the band for the hint line on the desktop', { options: { desktopPlace: 'below' } }, async ($: any, on: any) => {
+  test('desktopPlace below, the default: the chips leave the band for the hint line on the desktop', async ($: any, on: any) => {
     engine(on)
     await $.session.start({ surface: 'desktop', isInteractive: false, cwd: '/work' })
     const above = await $.ui.mount({ plugin: 'token-gauge', surface: 'desktop', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 } })
@@ -338,4 +338,84 @@ describe('token-gauge', () => {
     expect(await terminal.find({ type: 'Text', text: '☀' })).toBeUndefined() // the terminal keeps the band above
     await terminal.unmount()
   })
+
+  test('during a turn the context chip is read again every few seconds; ▲ is the growth since the turn began', async ($: any, on: any) => {
+    const clock = mock.clock(on, { now: NOW })
+    mock.store(on)
+    let tokens = 100_000
+    on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+    on('session.usage', () => ({ value: { startedAt: NOW, context: { tokens, window: 1_000_000 }, rateLimits: [] } }))
+    on('agent.list', () => ({ value: [] }))
+    on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
+    on('turn.complete', () => ({ text: '' }))
+    on('ui.render', ($$: any, e: any) => $$.ui.resolve(e).Text({ children: 'engine band' }))
+    await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    tokens = 180_000
+    await clock.advance(3_000)
+    const props = { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 160 }
+    let ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props })
+    expect(await ui.find({ type: 'Text', text: '180k / 1M' })).toBeDefined() // before the turn ends
+    await ui.unmount()
+    tokens = 200_000
+    await $.turn.complete({ answer: '', durationMs: 3000, isAborted: false, turnId: 't1', reason: 'answer' })
+    ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: { ...props, isWorking: false } })
+    expect(await ui.find({ type: 'Text', text: '· ▲100k' })).toBeDefined() // from 100k, not from the 180k read mid-turn
+    await ui.unmount()
+  })
+
+  test('a dropped prompt: the plugin that dropped it, and the hold cache-tax promises', () => {
+    const trace = [
+      { plugin: 'cache-tax', outcome: 'returned', returned: { drop: 'cache-tax: cold' } },
+      { plugin: 'engine', outcome: 'skipped', returned: undefined },
+    ]
+    expect(droppedBy(trace)).toBe('cache-tax')
+    expect(droppedBy([{ plugin: 'engine', outcome: 'returned', returned: { drop: 'stop' } }])).toBeUndefined() // the engine's own
+    expect(droppedBy([{ plugin: 'other', outcome: 'returned', returned: { text: 'hi' } }])).toBeUndefined()
+    expect(keepwarmHold('Send it again to pay it, and keepwarm will then hold the cache for 3h00m. Or /clear')).toBe('3h00m')
+    expect(keepwarmHold('keepwarm will then hold the cache for 45m.')).toBe('45m')
+    expect(keepwarmHold('dropped for another reason')).toBeUndefined()
+  })
+
+  for (const [choice, sent, filled] of [['다시 보내기', 1, 0], ['취소', 0, 1]] as const) {
+    test(`a prompt another hook dropped asks to send it again or put it back (${choice})`, async ($: any, on: any) => {
+      mock.clock(on, { now: NOW })
+      const asked: any[] = []
+      const submitted: any[] = []
+      const fills: any[] = []
+      const commands: any[] = []
+      const reason = 'test: the prompt cache went cold 5m ago. Send it again to pay it, and keepwarm will then hold the cache for 3h00m. Or /clear and start from a note.'
+      on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+      on('prompt.submit', (_$: any, e: any) => {
+        if (e.origin.kind === 'plugin') {
+          submitted.push(e.text)
+          return { text: e.text }
+        }
+        return { drop: reason }
+      })
+      on('tool.call', (_$: any, e: any) => {
+        asked.push(e)
+        return { result: { questions: e.questions, answers: { [e.questions[0].question]: choice } } }
+      })
+      on('prompt.fill', (_$: any, e: any) => {
+        fills.push(e)
+        return { isFilled: true, text: e.text, cursor: e.text.length }
+      })
+      on('command.list', () => ({ value: [{ name: 'keepwarm' }] }))
+      on('command.run', (_$: any, e: any) => {
+        commands.push(e)
+        return { text: 'ok' }
+      })
+      await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/w' })
+      const r = await $.prompt.submit({ text: '이어서 해 줘', origin: { kind: 'composer' } })
+      expect(r.drop).toBe(reason)
+      for (let i = 0; i < 50 && submitted.length + fills.length === 0; i++) await new Promise(res => setTimeout(res, 1))
+      expect(asked.length).toBe(1)
+      expect(asked[0].questions[0].question).toMatch(/^test 훅이 프롬프트를 막았습니다\. the prompt cache went cold .+ 그대로 다시 보낼까요\?$/)
+      expect(submitted.length).toBe(sent)
+      expect(fills.length).toBe(filled)
+      if (sent) expect(commands).toMatchObject([{ command: 'keepwarm', args: '3h00m' }])
+      if (filled) expect(fills[0]).toMatchObject({ text: '이어서 해 줘', mode: 'replace' })
+    })
+  }
 })

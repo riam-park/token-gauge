@@ -47,7 +47,7 @@
       "title": "데스크톱 칩 위치",
       "description": "데스크톱 앱에서 칩 줄을 입력창 위(above)에 둘지, 입력창 아래 힌트 줄 밑(below)에 둘지. 터미널은 늘 입력창 위입니다.",
       "options": ["above", "below"],
-      "default": "above"
+      "default": "below"
     }
   }
 }
