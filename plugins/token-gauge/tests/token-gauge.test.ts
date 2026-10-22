@@ -88,7 +88,7 @@ describe('token-gauge', () => {
   })
 
   for (const [surface, hasSurvey] of [['terminal', false], ['desktop', false], ['desktop', true]] as const) {
-    test(`mounts the band (${surface}${hasSurvey ? ', under a survey' : ''})`, { options: { desktopPlace: 'above' } }, async ($: any, on: any) => {
+    test(`mounts the band (${surface}${hasSurvey ? ', under a survey' : ''})`, async ($: any, on: any) => {
       mock.clock(on, { now: NOW })
       on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
       on('session.usage', () => ({
@@ -126,8 +126,7 @@ describe('token-gauge', () => {
   }
 
   test('install options', () => {
-    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', below: false }) // the desktop's chips above the prompt by default
-    expect(configure({ desktopPlace: 'below' }).below).toBe(true)
+    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '' })
     expect(configure({ actionsAt: 200, handoffDir: '  ' })).toMatchObject({ actionsAt: 70, handoffDir: '' }) // odd values keep defaults
     expect(handoffText('')).toContain('파일은 만들지 말고 이 답변에') // no folder: the memo comes as the answer
     configure({ cacheTtl: '5m', actionsAt: 80, showCost: false, handoffDir: 'notes/' })
@@ -322,34 +321,6 @@ describe('token-gauge', () => {
       await ui.unmount()
     })
   }
-
-  const HINT = { isDraft: false, isWorking: false, hint: '? for shortcuts' }
-
-  test('desktopPlace above, the default: the hint line on the desktop is left alone', async ($: any, on: any) => {
-    engine(on)
-    await $.session.start({ surface: 'desktop', isInteractive: false, cwd: '/work' })
-    const hint = await $.ui.mount({ plugin: 'token-gauge', surface: 'desktop', component: 'PromptHint', props: HINT })
-    expect(await hint.find({ type: 'Text', text: /113k ?\/ ?1M/ })).toBeUndefined()
-    await hint.unmount()
-  })
-
-  // The desktop draws the hint site one line high and clips the rest: one line of text, no borders, bars or buttons.
-  test('desktopPlace below: the chips leave the band for one line of text after the hint on the desktop', { options: { desktopPlace: 'below' } }, async ($: any, on: any) => {
-    engine(on)
-    await $.session.start({ surface: 'desktop', isInteractive: false, cwd: '/work' })
-    const above = await $.ui.mount({ plugin: 'token-gauge', surface: 'desktop', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 } })
-    expect(await above.find({ type: 'Text', text: '☀' })).toBeUndefined()
-    await above.unmount()
-    const below = await $.ui.mount({ plugin: 'token-gauge', surface: 'desktop', component: 'PromptHint', props: HINT })
-    expect(await below.find({ type: 'Text', text: /113k ?\/ ?1M/ })).toBeDefined()
-    expect(await below.find({ type: 'Text', text: /engine PromptHint/ })).toBeDefined() // the engine's hint stays, before the chips
-    expect(await below.find({ type: 'Svg' })).toBeUndefined()
-    expect(await below.find({ type: 'Button' })).toBeUndefined()
-    await below.unmount()
-    const terminal = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'PromptHint', props: HINT })
-    expect(await terminal.find({ type: 'Text', text: /113k ?\/ ?1M/ })).toBeUndefined() // the terminal keeps the band above
-    await terminal.unmount()
-  })
 
   test('during a turn the context chip is read again every few seconds; ▲ is the growth since the turn began', async ($: any, on: any) => {
     const clock = mock.clock(on, { now: NOW })

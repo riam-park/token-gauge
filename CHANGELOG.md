@@ -8,6 +8,12 @@
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-10-22
+
+### 제거
+
+- `desktopPlace` 설정과 입력창 아래 배치: 데스크톱 앱이 입력창 아래 힌트 자리를 보여 주지 않아 `below`로는 칩이 보이지 않았습니다. 칩은 터미널과 데스크톱 모두 입력창 위에 나옵니다. 저장해 둔 `desktopPlace` 값은 무시되므로 따로 손볼 것은 없습니다.
+
 ## [1.3.1] - 2026-10-22
 
 ### 수정
@@ -75,7 +81,8 @@
 - 캐시 10분 이하에서 `유지 90분` 버튼(cache-tax 연동), 작업 중 칩, 알림, `d` 단축키
 - 초보자용 README와 토큰·캐시 절약 가이드
 
-[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.3.1...HEAD
+[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.3.2...HEAD
+[1.3.2]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.3.2
 [1.3.1]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.3.1
 [1.3.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.3.0
 [1.2.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.2.0

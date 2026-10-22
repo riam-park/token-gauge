@@ -41,9 +41,8 @@ const QUESTION_LINE = 80 // the terminal's line above a question: two of its 40-
 
 // The userConfig options in plugin.json, asked at install and changed with /plugin configure or /config.
 // handoffDir '' asks for the handoff memo in the answer; a folder asks for a PROMPT file there.
-// below: on the desktop, the chips go under the prompt as one line of text (desktopPlace 'below') rather than above it (the default).
-export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string; below: boolean }
-const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', below: false }
+export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string }
+const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '' }
 let cfg = DEFAULTS
 
 // Options as saved, checked: a missing or odd value keeps its default.
@@ -56,7 +55,6 @@ export function configure(o: Record<string, unknown>): Config {
     showCost: o.showCost !== false,
     alerts: o.alerts !== false,
     handoffDir: dir,
-    below: o.desktopPlace === 'below',
   }
   return cfg
 }
@@ -343,24 +341,13 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // The band above the prompt; on the desktop with desktopPlace 'below', under the prompt instead.
+  // The band above the prompt.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const rest = await next(e) // what other mods and Claude Code draw here stays
-    if (e.surface === 'desktop' && cfg.below) return rest
     // A survey (a question in the band) keeps the chip row, without buttons or the detail panel, so the question keeps the room
     const band = await bandTree($, $.ui.resolve(e), e.surface === 'terminal', e.props.bodyColumns - 2, e.props.isWorking ? 'working' : 'idle', e.props.hasSurvey)
     if (!band) return rest
     return { type: 'Box', props: { flexDirection: 'column' }, children: rest ? [band, rest] : [band] }
-  })
-
-  // Under the prompt, after the engine's hint: the desktop draws this site one line high and clips the rest,
-  // so the chips are one line of text there, without borders, buttons or the detail panel.
-  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    const rest = await next(e)
-    if (e.surface !== 'desktop' || !cfg.below) return rest
-    const line = questionLine($.ui.resolve(e), fit(view(snap, await $.clock.now(), false), (e.viewport?.columns ?? QUESTION_COLUMNS) - 2))
-    if (!line) return rest
-    return { type: 'Box', props: { flexDirection: 'row', gap: 2 }, children: rest ? [rest, line] : [line] }
   })
 
   // A question dialog takes the prompt's place, the band with it: the chips stand above the question.
@@ -856,7 +843,7 @@ function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working: (Wor
   )
 }
 
-// The chips as one line of colored text, for the terminal's few rows above a question dialog and the desktop's hint line.
+// The chips as one line of colored text, for the terminal's few rows above a question dialog.
 function questionLine(ui: any, v: View) {
   const { Text } = ui
   const parts: unknown[] = []
