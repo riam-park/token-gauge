@@ -135,6 +135,48 @@ claude plugin update token-gauge@token-gauge
 - **막힌 프롬프트**: 다른 mod의 훅이 보낸 프롬프트를 막으면(예: cache-tax가 식은 캐시의 재기록 비용을 알릴 때) 막혔다는 경고를 띄우기 전에 질문 카드로 그 이유와 함께 `보내기`/`취소`를 묻습니다. `보내기`는 같은 내용을 그대로 보내고, `취소`는 입력창에 되돌립니다. 카드를 닫으면 원래 경고가 나오고 입력창에 되돌립니다.
 - **단축키**: 칩 줄을 클릭하거나 `Ctrl+X` `Tab`으로 포커스를 옮긴 뒤 `d`
 
+## 📖 용어
+
+README와 Claude Code 화면에 나오는 말입니다. 공식 이름은 [Claude Code 용어집](https://code.claude.com/docs/en/glossary)과 [데스크톱 문서](https://code.claude.com/docs/en/desktop)를 따릅니다. 공식 문서에 이름이 없는 화면 요소는 "문서에 없음"으로 표시하고 엔진(플러그인 API) 이름을 함께 적었습니다. `칩 줄 그림`은 위 [무엇을 보여 주나요](#-무엇을-보여-주나요)의 번호 그림입니다. 그림이 없는 항목은 위 공식 문서에서 화면을 볼 수 있습니다.
+
+| 용어                 | 공식 이름                            | 뜻                                                           | 그림             |
+|----------------------|--------------------------------------|--------------------------------------------------------------|------------------|
+| 세션                 | Session                              | 한 폴더에서 이어지는 대화 하나. `/clear`면 새 세션           | 그림 없음        |
+| 턴                   | Turn                                 | 메시지를 보내고 Claude가 답을 마칠 때까지                    | 그림 없음        |
+| 요청                 | API request                          | 턴 안에서 모델을 한 번 부르는 것. 턴마다 여러 번             | 그림 없음        |
+| 도구 호출            | Tool use                             | Read, Bash, Edit 같은 동작 한 번                             | 칩 줄 그림 8     |
+| subagent             | Subagent                             | 자기 컨텍스트에서 일을 맡아 요약을 돌려주는 보조             | 그림 없음        |
+| 명령                 | Command                              | 입력창에 `/이름`으로 실행. 옛 이름 slash command             | 입력창 그림 1    |
+| 컨텍스트 창          | Context window                       | 대화, 파일, 명령 출력, CLAUDE.md가 담기는 작업 기억          | 칩 줄 그림 4, 14 |
+| compaction           | Compaction                           | 창이 차면 대화를 요약해 줄임. `/compact`로 직접              | 칩 줄 그림 13    |
+| 프롬프트 캐시        | Prompt caching                       | 보낸 앞부분을 저장해 다음 요청을 싸게 함. 시간이 지나면 식음 | 칩 줄 그림 6, 15 |
+| 사용량 한도          | Usage limits                         | 구독 요금제의 5시간, 주간 한도                               | 칩 줄 그림 1, 2  |
+| 모델                 | Model                                | 답을 만드는 Claude: Opus, Sonnet, Haiku                      | 입력창 그림 5    |
+| effort               | Effort level                         | 생각을 얼마나 깊게 할지: low ~ max                           | 입력창 그림 5    |
+| 권한 모드            | Permission mode                      | 동작 전에 물을지 정하는 기본 방식                            | 입력창 그림 4    |
+| 플러그인             | Plugin                               | skill, hook, subagent, MCP 서버를 묶어 설치하는 단위         | 그림 없음        |
+| 훅                   | Hook                                 | 정해진 시점에 자동으로 실행되는 처리                         | 그림 없음        |
+| mod                  | mod(엔진 문서)                       | 화면을 바꾸는 플러그인. token-gauge가 mod                    | 칩 줄 그림       |
+| 입력창               | prompt box                           | 할 일을 적고 Enter로 보내는 곳                               | 입력창 그림 3    |
+| 입력창 위 영역       | 문서에 없음 · 엔진 `AbovePrompt`     | mod가 그리는 자리. 칩 줄이 여기 놓임                         | 칩 줄 그림       |
+| 칩, 칩 줄, 상세 패널 | token-gauge의 이름                   | 테두리 상자 하나가 칩. 그림 1~9가 칩 줄, 10~15가 상세 패널   | 칩 줄 그림       |
+| 토스트               | 문서에 없음 · 엔진 `$.ui.toast`      | 잠깐 떴다 사라지는 알림                                      | 토스트 그림      |
+| 질문 카드            | 문서에 없음 · 도구 `AskUserQuestion` | Claude가 선택지를 묻는 카드                                  | 그림 없음        |
+| 다음 단계 박스       | 문서에 없음                          | 데스크톱 턴 끝의 요약, 질문, 버튼. 떠 있으면 칩 줄이 가려짐  | 입력창 그림 2    |
+| tasks pane           | tasks pane                           | 데스크톱에서 subagent, 백그라운드 명령을 보이는 창           | 그림 없음        |
+
+**입력창 그림** (데스크톱 앱)
+
+![데스크톱 앱 입력창 둘레에 번호를 붙인 그림](docs/images/terms-prompt-area.png)
+
+1 명령과 그 결과 · 2 다음 단계 박스 · 3 입력창 · 4 권한 모드(`권한 무시`는 Bypass permissions) · 5 모델과 effort
+
+**토스트 그림** (데스크톱 앱. 그림 Read에도 절약 팁이 뜨던 고치기 전 화면)
+
+![token-gauge 절약 팁 토스트](docs/images/terms-toast.png)
+
+터미널에서는 권한 모드가 입력창 아래 줄(`auto mode on`)에, 모델과 effort가 시작 화면 맨 위에 나옵니다([터미널 그림](docs/images/terminal.png)).
+
 ## ⚙️ 설치할 때 묻는 설정
 
 모두 기본값이 있어서 그냥 넘어가도 됩니다. 나중에 바꾸려면 `/plugin configure token-gauge@token-gauge`를 입력하거나 `/config`에서 찾습니다. 바꾼 값은 새 세션부터 적용됩니다.
