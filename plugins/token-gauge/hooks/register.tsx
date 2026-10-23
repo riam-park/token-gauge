@@ -32,6 +32,10 @@ const UNUSED_MCP = 5_000
 const UNUSED_AFTER_TURNS = 10
 const LARGE_MEMORY = 8_000
 const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit'])
+const MEDIA_FILE = /\.(png|jpe?g|gif|webp|pdf)$/i // Read sends these as pictures or a document: offset/limit does not apply
+const PICTURE_MAX = 4_784 // the high-resolution tier's cap (Claude 4.7 and later); the standard tier's is 1,568
+const PICTURE_TOKENS = 1_600 // shortcut: a picture of unknown size, taken as a standard-tier one
+const PAGE_TEXT_TOKENS = 2_250 // the middle of the 1,500-3,000 a PDF page's text takes
 const QUESTION_COLUMNS = 100 // a site with no measured width
 const REFRESH_TICKS = 3 // seconds between context reads while Claude works
 const PERSON = new Set(['composer', 'bridge']) // prompt origins someone is there to ask about
@@ -960,12 +964,40 @@ export function redact(s: string) {
   return SECRETS.reduce((out, [pattern, to]) => out.replace(pattern, to), s)
 }
 
-// Tokens of a tool result, from its length: about four characters a token.
+// Tokens of a tool result, from its length: about four characters a token. A picture or a PDF that Read
+// returns is counted as the model is billed for it, not by the length of its base64.
 export function estimate(result: unknown) {
+  const media = mediaTokens((result as { result?: unknown } | undefined)?.result)
+  if (media !== undefined) return media
   try {
     return Math.round((JSON.stringify(result) ?? '').length / 4)
   } catch {
     return 0
+  }
+}
+
+// Read's picture, PDF and PDF-as-pictures records: a picture costs one token per 28 x 28 pixel patch, a PDF
+// page its text and its picture (platform.claude.com vision and pdf-support docs). Undefined for anything else.
+type MediaRead = { type?: string; file?: { base64?: string; count?: number; dimensions?: Record<string, number | undefined> } }
+function mediaTokens(r: unknown) {
+  const { type, file } = (r ?? {}) as MediaRead
+  if (type === 'image') {
+    const d = file?.dimensions ?? {}
+    const w = d.displayWidth ?? d.originalWidth
+    const h = d.displayHeight ?? d.originalHeight
+    return w && h ? Math.min(PICTURE_MAX, Math.ceil(w / 28) * Math.ceil(h / 28)) : PICTURE_TOKENS
+  }
+  if (type === 'pdf') return pdfPages(file?.base64 ?? '') * (PAGE_TEXT_TOKENS + PICTURE_TOKENS)
+  if (type === 'parts') return (file?.count ?? 1) * PICTURE_TOKENS
+  return undefined
+}
+
+// shortcut: counts page objects in the raw file, so a PDF that packs them in compressed object streams counts as one page; parse the page tree if that matters
+export function pdfPages(base64: string) {
+  try {
+    return Math.max(1, atob(base64).match(/\/Type\s*\/Page(?![A-Za-z])/g)?.length ?? 0)
+  } catch {
+    return 1
   }
 }
 
@@ -1026,7 +1058,7 @@ export function lostFiles(paths: readonly string[], messages: readonly { text: s
 // A tip for an output that cost more than it had to; tokens already scaled.
 export function advice(e: Record<string, unknown>, label: string, tokens: number): Advice | undefined {
   const tool = String(e.tool ?? '')
-  if (tool === 'Read' && e.offset === undefined && e.limit === undefined && tokens >= LARGE_READ) {
+  if (tool === 'Read' && e.offset === undefined && e.limit === undefined && !MEDIA_FILE.test(String(e.file_path ?? '')) && tokens >= LARGE_READ) {
     return { key: 'large-read', text: `큰 파일 통째 읽기: ${label} ≈${short(tokens)} · offset/limit로 필요한 부분만 읽으면 줄어듭니다` }
   }
   if (tool === 'Bash' && tokens >= LARGE_OUTPUT) return { key: 'large-bash', text: `긴 명령 출력: ${label} ≈${short(tokens)} · head/tail/grep으로 줄이면 됩니다` }

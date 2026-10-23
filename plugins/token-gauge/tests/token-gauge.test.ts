@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { advice, calibrate, configure, droppedBy, fit, fnv, forecastText, handoffText, hitRate, isNewer, itemLabel, keepwarmHold, largest, latestVersion, lostFiles, modelName, pace, readKind, redact, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
+import { advice, calibrate, configure, droppedBy, estimate, fit, fnv, forecastText, handoffText, hitRate, isNewer, itemLabel, keepwarmHold, largest, latestVersion, lostFiles, modelName, pace, pdfPages, readKind, redact, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
 import type { Snapshot } from '../hooks/register'
 
 const NOW = Date.parse('2026-10-22T00:00:00Z')
@@ -253,9 +253,24 @@ describe('token-gauge', () => {
     expect(handoffText('')).not.toContain('compact')
   })
 
+  test('estimate: text by length, a picture by its 28-pixel patches, a PDF by its pages', () => {
+    expect(estimate('x'.repeat(398))).toBe(100) // 400 characters with the quotes
+    const picture = (dimensions: Record<string, number>) => ({ result: { type: 'image', file: { base64: 'A'.repeat(90_000), type: 'image/png', originalSize: 69_365, dimensions } } })
+    expect(estimate(picture({ originalWidth: 1291, originalHeight: 317, displayWidth: 1291, displayHeight: 317 }))).toBe(47 * 12) // not 22k from the base64
+    expect(estimate(picture({ originalWidth: 8000, originalHeight: 8000 }))).toBe(4784) // capped as the model downscales it
+    expect(estimate(picture({}))).toBe(1600)
+    const pdf = btoa('%PDF-1.4 1 0 obj <</Type /Pages /Kids [2 0 R 3 0 R] /Count 2>> 2 0 obj <</Type /Page>> 3 0 obj <</Type/Page>>')
+    expect(pdfPages(pdf)).toBe(2)
+    expect(pdfPages('not base64 at all!')).toBe(1)
+    expect(estimate({ result: { type: 'pdf', file: { filePath: '/w/a.pdf', base64: pdf, originalSize: 99 } } })).toBe(2 * 3850)
+    expect(estimate({ result: { type: 'parts', file: { filePath: '/w/a.pdf', originalSize: 99, count: 3, outputDir: '/t' } } })).toBe(3 * 1600)
+  })
+
   test('advice: whole large files, long outputs, unused MCP servers', () => {
     expect(advice({ tool: 'Read', file_path: '/w/big.ts' }, 'Read big.ts', 12_000)?.key).toBe('large-read')
     expect(advice({ tool: 'Read', file_path: '/w/big.ts', offset: 1, limit: 200 }, 'Read big.ts', 12_000)).toBeUndefined()
+    expect(advice({ tool: 'Read', file_path: '/w/shot.PNG' }, 'Read shot.PNG', 12_000)).toBeUndefined() // offset/limit does not apply to a picture
+    expect(advice({ tool: 'Read', file_path: '/w/spec.pdf' }, 'Read spec.pdf', 12_000)).toBeUndefined()
     expect(advice({ tool: 'Bash', command: 'make' }, 'Bash make', 9000)?.text).toBe('긴 명령 출력: Bash make ≈9k · head/tail/grep으로 줄이면 됩니다')
     expect(advice({ tool: 'Agent' }, 'Agent', 9000)?.key).toBe('large-agent')
     expect(advice({ tool: 'Bash', command: 'ls' }, 'Bash ls', 300)).toBeUndefined()
