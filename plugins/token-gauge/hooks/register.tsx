@@ -740,7 +740,8 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
 
 // Base input price per million tokens by model id (platform.claude.com pricing, 2026-10). Writing the cache costs 2x that
 // for the 1-hour cache, 1.25x for the 5-minute one.
-// shortcut: older models (Opus 4.1 and before, Sonnet 3.x) are left out and show no cost; Haiku 5.5 past 100K tokens costs more; add rows as models ship
+// A Haiku 5.5 prompt past 100K tokens is billed at $0.50 whole (cache-tax prices it the same).
+// shortcut: older models (Opus 4.1 and before, Sonnet 3.x) are left out and show no cost; add rows as models ship
 const INPUT_USD: [RegExp, number][] = [
   [/fable|mythos/i, 10],
   [/opus-5-5/i, 4],
@@ -753,7 +754,7 @@ const INPUT_USD: [RegExp, number][] = [
 
 // What re-writing `tokens` into a cold cache costs at list price; undefined for a model the table does not know.
 export function rewriteUsd(model: string | undefined, tokens: number, ttlMs: number) {
-  const price = model ? INPUT_USD.find(([re]) => re.test(model))?.[1] : undefined
+  const price = model && /haiku-5/i.test(model) && tokens > 100_000 ? 0.5 : model ? INPUT_USD.find(([re]) => re.test(model))?.[1] : undefined
   return price === undefined ? undefined : (tokens / 1e6) * price * (ttlMs >= 60 * 60_000 ? 2 : 1.25)
 }
 

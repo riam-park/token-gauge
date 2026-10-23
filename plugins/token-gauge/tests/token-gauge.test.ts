@@ -389,6 +389,8 @@ describe('token-gauge', () => {
     expect(Math.round(rewriteUsd('claude-opus-5-5', 252_672, 60 * MIN)! * 100)).toBe(202) // as cache-tax prices it: $8/MTok for the 1-hour cache
     expect(rewriteUsd('claude-sonnet-5-5[1m]', 1_000_000, 5 * MIN)).toBe(2.5)
     expect(rewriteUsd('claude-3-opus', 1_000, 60 * MIN)).toBeUndefined()
+    expect(Math.round(rewriteUsd('claude-haiku-5-5', 252_672, 60 * MIN)! * 100)).toBe(25) // past 100K a Haiku 5.5 prompt costs $0.50 whole, as cache-tax showed
+    expect(Math.round(rewriteUsd('claude-haiku-5-5', 50_000, 60 * MIN)! * 1000)).toBe(10) // $0.10 up to 100K
     const v = view({ ...calm, tokens: 252_672, model: 'claude-opus-5-5', lastRequestAt: NOW - 2 * 60 * MIN }, NOW, false)
     expect(v.cache?.rewrite).toBe('재기록 ~253k ≈$2.02')
   })
