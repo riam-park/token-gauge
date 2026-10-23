@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { advice, calibrate, cardText, configure, keepPings, droppedBy, estimate, fit, fnv, forecastText, handoffText, hitRate, isNewer, itemLabel, keepwarmHold, koDuration, largest, latestVersion, lostFiles, modelName, pace, pdfPages, readKind, redact, rewriteUsd, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
+import { advice, calibrate, cardText, compactArgs, configure, keepPings, droppedBy, estimate, fit, fnv, forecastText, handoffText, hitRate, isNewer, itemLabel, keepwarmHold, koDuration, largest, latestVersion, lostFiles, memoUsd, modelName, pace, pdfPages, readKind, redact, rewriteUsd, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
 import type { Snapshot } from '../hooks/register'
 
 const NOW = Date.parse('2026-10-22T00:00:00Z')
@@ -404,7 +404,9 @@ describe('token-gauge', () => {
     expect(koDuration('5m')).toBe('5분')
     expect(koDuration('2d4h')).toBe('2일 4시간')
     expect(koDuration('15d 17h')).toBe('15일 17시간') // cache-tax spaces its longer durations
-    expect(cardText('cache-tax', 'cache-tax: the prompt cache went cold 15d 17h ago. Sending this re-writes up to 70,146 tokens at $0.2/MTok = $0.01 (a warm turn would have cost $0.00). Send it again to pay it, and keepwarm will then hold the cache for 3h00m.', 60 * MIN)).toMatchObject({ cost: '0.01', hold: '3h00m', keepUsd: '0.00' })
+    expect(cardText('cache-tax', 'cache-tax: the prompt cache went cold 15d 17h ago. Sending this re-writes up to 70,146 tokens at $0.2/MTok = $0.01 (a warm turn would have cost $0.00). Send it again to pay it, and keepwarm will then hold the cache for 3h00m.', 60 * MIN, 'claude-haiku-5-5')).toMatchObject({ cost: '0.01', hold: '3h00m', keepUsd: '0.00' })
+    expect(cardText('cache-tax', 'cache-tax: the prompt cache went cold 1h ago. Sending this re-writes up to 252,672 tokens at $8/MTok = $2.02 (a warm turn would have cost $0.05). Send it again to pay it, and keepwarm will then hold the cache for 3h00m.', 60 * MIN, 'claude-opus-5-5').keepUsd).toBe('0.15') // Opus 5.5 reads the cache at $0.20, not 0.1x its $4
+    expect(cardText('cache-tax', 'cache-tax: the prompt cache went cold 1h ago. Sending this re-writes up to 252,672 tokens at $8/MTok = $2.02 (a warm turn would have cost $0.05). Send it again to pay it, and keepwarm will then hold the cache for 3h00m.', 60 * MIN).keepUsd).toBeUndefined() // no model: no guess
     expect(koDuration('soon')).toBe('soon')
     expect(keepPings('3h00m', 60 * MIN)).toBe(3)
     expect(keepPings('45m', 60 * MIN)).toBeUndefined() // over before the first refresh
@@ -436,7 +438,7 @@ describe('token-gauge', () => {
   // with the hold the person chose, /keepwarm holds it; sending alone turns off the hold cache-tax starts on its own
   const SENT = 'token-gauge: 보내기를 골라, test 플러그인이 막았던 프롬프트를 다시 보냅니다.'
   for (const [choice, sent, filled, shown, surface, kind, keepwarm, toast] of [
-    ['보내고 3시간 유지 ($2.02 + 약 $0.30)', 1, 0, SENT, 'terminal', 'composer', '3h00m', '다시 보냈습니다 · /keepwarm으로 3시간 동안 캐시를 유지합니다'],
+    ['보내고 3시간 유지 ($2.02 + 약 $0.15)', 1, 0, SENT, 'terminal', 'composer', '3h00m', '다시 보냈습니다 · /keepwarm으로 3시간 동안 캐시를 유지합니다'],
     ['보내기만 ($2.02)', 1, 0, SENT, 'terminal', 'composer', 'off', '다시 보냈습니다 · 캐시 유지는 켜지 않았습니다'],
     ['취소', 0, 1, 'token-gauge: 보내지 않았습니다. 입력창에 되돌렸습니다.', 'desktop', 'sdk', '', ''],
   ] as const) {
@@ -470,6 +472,7 @@ describe('token-gauge', () => {
         return { text: 'ok' }
       })
       on('session.surfaces', () => ({ value: [surface] }))
+      on('session.model', () => ({ value: 'claude-opus-5-5' }))
       on('ui.toast', (_$: any, e: any) => {
         toasts.push(e.text)
         return { value: undefined }
@@ -480,7 +483,7 @@ describe('token-gauge', () => {
       await clock.advance(1) // the send waits for a timer past the hook
       for (let i = 0; i < 50 && submitted.length + fills.length === 0; i++) await new Promise(res => setTimeout(res, 1))
       expect(asked.length).toBe(1)
-      expect(asked[0].questions[0]).toMatchObject({ header: 'token-gauge', question: 'test 플러그인이 이 프롬프트를 막았습니다.\n프롬프트 캐시가 38시간 39분 전에 식어서, 지금 보내면 252,672토큰을 다시 기록합니다: $2.02 (캐시가 살아 있었으면 $0.05)\n3시간 유지를 고르면 test가 50분마다 캐시를 갱신합니다(3번, 약 $0.30). 보내기만 고르면 유지를 켜지 않습니다.\n그래도 보낼까요? 취소하면 입력창에 되돌립니다. 입력창에서 다시 보내면 test가 비용을 내는 것으로 보고 통과시킵니다.' }) // whose card, and the reason in Korean
+      expect(asked[0].questions[0]).toMatchObject({ header: 'token-gauge', question: 'test 플러그인이 이 프롬프트를 막았습니다.\n프롬프트 캐시가 38시간 39분 전에 식어서, 지금 보내면 252,672토큰을 다시 기록합니다: $2.02 (캐시가 살아 있었으면 $0.05)\n3시간 유지를 고르면 test가 50분마다 캐시를 갱신합니다(3번, 약 $0.15). 보내기만 고르면 유지를 켜지 않습니다.\n그래도 보낼까요? 취소하면 입력창에 되돌립니다. 입력창에서 다시 보내면 test가 비용을 내는 것으로 보고 통과시킵니다.' }) // whose card, and the reason in Korean
       expect(submitted.length).toBe(sent)
       expect(fills.length).toBe(filled)
       if (sent) expect(commands).toMatchObject([{ command: 'keepwarm', args: keepwarm }])
@@ -521,6 +524,19 @@ describe('token-gauge', () => {
   })
 
   // 2026-10-23: presses during a long turn showed nothing and queued /compact and the memo twice each
+  test('/compact keeps the edited files; the memo button says what it costs', () => {
+    expect(compactArgs([])).toBe('')
+    expect(compactArgs(['C:/w/a.py', 'C:/w/b.py'])).toBe('이번 세션에서 편집한 파일 경로를 요약에 모두 남겨 줘: C:/w/a.py, C:/w/b.py')
+    expect(compactArgs(Array.from({ length: 22 }, (_, i) => `f${i}`))).toMatch(/^.+: f2, .+, f21 외 2개$/) // the latest 20
+    expect(memoUsd('claude-opus-5-5', 800_000, false, 60 * MIN)?.toFixed(2)).toBe('0.22') // 800k read at $0.20 + 3k out at $20
+    expect(memoUsd('claude-opus-5-5', 800_000, true, 60 * MIN)?.toFixed(2)).toBe('6.46') // cold: written again at $8
+    expect(memoUsd('claude-3-opus', 800_000, false, 60 * MIN)).toBeUndefined()
+    const s = { ...calm, tokens: 800_000, lastRequestAt: NOW - 60_000, model: 'claude-opus-5-5' }
+    expect(view(s, NOW, false).ctx?.memoUsd).toBe('0.22')
+    expect(detail({ ...calm, model: 'claude-next-9' }, '비용')).toBe('단가표에 없는 모델(claude-next-9)이라 금액을 보이지 않습니다')
+    expect(detail(calm, '비용')).toBeUndefined()
+  })
+
   test('/compact pressed again while it waits: said at once, run once', async ($: any, on: any) => {
     mock.clock(on, { now: NOW })
     const toasts: string[] = []
@@ -534,7 +550,7 @@ describe('token-gauge', () => {
       return { value: undefined }
     })
     on('command.run', (_$: any, e: any) => {
-      runs.push(e.command)
+      runs.push(`${e.command} ${e.args}`.trim())
       return new Promise(res => (finish = () => res({ text: 'Compacted' })))
     })
     await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
@@ -543,6 +559,7 @@ describe('token-gauge', () => {
     await ui.press({ key: 'token-gauge-compact' })
     for (let i = 0; i < 50 && runs.length === 0; i++) await new Promise(res => setTimeout(res, 1))
     expect(runs).toEqual(['compact'])
+    expect(await ui.find({ type: 'Button', label: '인계 메모' })).toBeDefined()
     expect(await ui.find({ type: 'Button', label: '/compact 실행 중' })).toBeDefined()
     expect(toasts).toEqual(['/compact를 실행합니다 · 컨텍스트가 크면 1~2분 걸립니다', '이미 눌렀습니다 · 차례가 되면 /compact를 실행합니다'])
     finish()
@@ -579,7 +596,7 @@ describe('token-gauge', () => {
       await $.turn.complete({ answer: '', durationMs: 1000, isAborted: false, turnId, reason: 'answer' })
     }
     ui = await band()
-    expect(await ui.find({ type: 'Button', label: '인계 메모 후 새 세션' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', label: '인계 메모' })).toBeDefined()
     await ui.press({ key: 'token-gauge-handoff' })
     for (let i = 0; i < 50 && sent.length < 2; i++) await new Promise(res => setTimeout(res, 1))
     expect(sent.length).toBe(2)

@@ -63,6 +63,13 @@ export function configure(o: Record<string, unknown>): Config {
   return cfg
 }
 
+// What /compact is asked to keep: the files this session edited, which a summary may drop (the compact detail line).
+export function compactArgs(paths: readonly string[]) {
+  if (!paths.length) return ''
+  const shown = paths.slice(-20)
+  return `이번 세션에서 편집한 파일 경로를 요약에 모두 남겨 줘: ${shown.join(', ')}${paths.length > shown.length ? ` 외 ${paths.length - shown.length}개` : ''}`
+}
+
 // `lost`: files edited this session that the last compaction's summary no longer names.
 export function handoffText(dir: string, lost: readonly string[] = []) {
   const parts = '배경, 관련 파일 경로, 목표, 검증 기준, 범위 밖 항목'
@@ -132,7 +139,7 @@ export type View = {
     seven?: { percent: number; color: string; reset?: string }
     cost?: string
   }
-  ctx?: { icon: string; color: string; used: string; window: string; percent: number; bar: Bar; delta?: string; turns?: string; offerActions: boolean }
+  ctx?: { icon: string; color: string; used: string; window: string; percent: number; bar: Bar; delta?: string; turns?: string; offerActions: boolean; memoUsd?: string }
   cache?: { color: string; text: string; isCold: boolean; rewrite?: string; offerKeep: boolean }
   detail: { label: string; text: string }[]
   slices: { name: string; tokens: number; color: string; share: number }[]
@@ -390,8 +397,10 @@ async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, colu
         .then(() => $.ui.toast('cache-tax: 90분 동안 캐시를 유지합니다 · /keepwarm off로 취소'))
         .catch(() => $.ui.toast('cache-tax의 /keepwarm을 실행하지 못했습니다'))
     },
-    compact: () => queue($, 'compact', '/compact를 실행', () => $.command.run({ command: 'compact' })),
-    handoff: () => queue($, 'handoff', '인계 메모를 요청', () => $.prompt.submit({ text: handoffText(cfg.handoffDir, snap.compaction?.lost), asUser: true })),
+    compact: () => queue($, 'compact', '/compact를 실행', () => $.command.run({ command: 'compact', args: compactArgs([...edited]) })),
+    // a memo queued behind a /compact is written from its summary
+    handoff: () =>
+      queue($, 'handoff', '인계 메모를 요청', () => $.prompt.submit({ text: handoffText(cfg.handoffDir, snap.compaction?.lost), asUser: true }), pressed.has('compact') ? ' · /compact 뒤라 요약을 보고 씁니다' : ''),
     toggle: () => {
       showDetail = !showDetail
       if (showDetail) void readToday($).then(() => $.ui.invalidate('ui.render')).catch(() => {})
@@ -403,11 +412,11 @@ async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, colu
 
 // A press while Claude works waits for the turn's end with nothing on screen, and a big context answers slowly:
 // say so at once, and take the press once until it runs.
-function queue($: EngineInterface, key: string, what: string, run: () => Promise<unknown>) {
+function queue($: EngineInterface, key: string, what: string, run: () => Promise<unknown>, note = '') {
   if (pressed.has(key)) return $.ui.toast(`이미 눌렀습니다 · 차례가 되면 ${what}합니다`)
   pressed.set(key, mainTurns)
   $.ui.invalidate('ui.render') // the button now reads 대기 중 or 실행 중
-  $.ui.toast(work ? `작업이 끝나면 ${what}합니다` : `${what}합니다 · 컨텍스트가 크면 1~2분 걸립니다`)
+  $.ui.toast(work ? `작업이 끝나면 ${what}합니다${note}` : `${what}합니다 · 컨텍스트가 크면 1~2분 걸립니다${note}`)
   run()
     .catch(() => $.ui.toast(`${what}하지 못했습니다`))
     .finally(() => {
@@ -578,7 +587,7 @@ async function typedByPerson($: EngineInterface, kind: string) {
 // hook's own reason.
 // With a cache hold on offer, the person picks whether to keep the cache warm as well as whether to send.
 async function askDropped($: EngineInterface, text: string, by: string, reason: string) {
-  const card = cardText(by, reason, cfg.cacheTtlMs)
+  const card = cardText(by, reason, cfg.cacheTtlMs, snap.model)
   const cost = card.cost ? `$${card.cost}` : ''
   const keep = card.hold ? `보내고 ${koDuration(card.hold)} 유지 (${[cost, card.keepUsd && `약 $${card.keepUsd}`].filter(Boolean).join(' + ') || '비용 미상'})` : undefined
   const send = card.hold ? `보내기만${cost && ` (${cost})`}` : `${SEND_ANYWAY}${cost && ` (${cost})`}`
@@ -595,13 +604,15 @@ async function askDropped($: EngineInterface, text: string, by: string, reason: 
 // The card's question: who dropped the prompt, why (cache-tax's English reason read into Korean; any other reason as
 // it came), and what cancelling does. `cost` is what sending costs, when the reason says; `hold` the cache hold the
 // reason offers, `keepUsd` what holding it costs.
-export function cardText(by: string, reason: string, ttlMs: number) {
+export function cardText(by: string, reason: string, ttlMs: number, model?: string) {
   const why = reason.startsWith(`${by}:`) ? reason.slice(by.length + 1).trimStart() : reason
   const m = /went cold (.+?) ago\. Sending this re-writes up to ([\d,]+) tokens at \$([\d.]+)\/MTok = \$([\d.]+) \(a warm turn would have cost \$([\d.]+)\)/.exec(why)
   const hold = keepwarmHold(why)
   const pings = hold ? keepPings(hold, ttlMs) : undefined
-  // a ping reads the cache once: 0.1x the input price, which a write costs 2x (1-hour cache) or 1.25x (5-minute)
-  const keepUsd = m && pings ? ((Number(m[2]!.replace(/,/g, '')) / 1e6) * Number(m[3]) * (ttlMs >= 60 * 60_000 ? 0.05 : 0.08) * pings).toFixed(2) : undefined
+  // a ping reads the cache once, at the model's cache-read price
+  const tokens = m ? Number(m[2]!.replace(/,/g, '')) : 0
+  const read = prices(model, tokens)?.read
+  const keepUsd = m && pings && read !== undefined ? ((tokens / 1e6) * read * pings).toFixed(2) : undefined
   const lines = [`${by} 플러그인이 이 프롬프트를 막았습니다.`]
   if (m) {
     lines.push(`프롬프트 캐시가 ${koDuration(m[1]!)} 전에 식어서, 지금 보내면 ${m[2]}토큰을 다시 기록합니다: $${m[4]} (캐시가 살아 있었으면 $${m[5]})`)
@@ -722,6 +733,9 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
       turns: left === undefined ? undefined : `≈ ${left > 999 ? '999+' : left}턴`,
       offerActions: level >= cfg.actionsAt,
     }
+    const isCold = s.lastRequestAt !== undefined && now >= s.lastRequestAt + cfg.cacheTtlMs
+    const memo = cfg.showCost ? memoUsd(s.model, s.tokens, isCold, cfg.cacheTtlMs) : undefined
+    if (memo !== undefined) v.ctx.memoUsd = memo.toFixed(2)
     v.slices = slices(s.slices, s.window)
     if (s.compactsAt) {
       const growth = average(s.deltas)
@@ -747,6 +761,7 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
     v.detail.push({ label: 'compact', text: `${size}${lost}` })
   }
   if (s.model) {
+    if (cfg.showCost && !prices(s.model, 0)) v.detail.push({ label: '비용', text: `단가표에 없는 모델(${s.model})이라 금액을 보이지 않습니다` })
     const name = modelName(s.model)
     v.model = { name, effort: s.effort === undefined ? undefined : String(s.effort), color: FAMILY[name.split(' ')[0]!.toLowerCase()] ?? C.marker }
   }
@@ -774,22 +789,43 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
 
 // Base input price per million tokens by model id (platform.claude.com pricing, 2026-10). Writing the cache costs 2x that
 // for the 1-hour cache, 1.25x for the 5-minute one.
-// A Haiku 5.5 prompt past 100K tokens is billed at $0.50 whole (cache-tax prices it the same).
+// A Haiku 5.5 prompt past 100K tokens is billed at $0.50 whole (cache-tax prices it the same). The second number is
+// a cache read: 0.1x the input price, except where the price list says otherwise (Opus 5.5, Fable/Mythos 5.1).
+// Output costs 5x the input price on every model here.
 // shortcut: older models (Opus 4.1 and before, Sonnet 3.x) are left out and show no cost; add rows as models ship
-const INPUT_USD: [RegExp, number][] = [
-  [/fable|mythos/i, 10],
-  [/opus-5-5/i, 4],
-  [/opus-(5|4-[5-8])/i, 5],
-  [/sonnet-5/i, 2],
-  [/sonnet-4-[56]/i, 3],
-  [/haiku-5/i, 0.1],
-  [/haiku-4-5/i, 1],
+// shortcut: the Haiku 5.5 and Fable/Mythos 5 cache reads are not listed, so 0.1x is assumed; replace once published
+const PRICES: [RegExp, number, number][] = [
+  [/fable-5-1|mythos-5-1/i, 10, 0.25],
+  [/fable|mythos/i, 10, 1],
+  [/opus-5-5/i, 4, 0.2],
+  [/opus-(5|4-[5-8])/i, 5, 0.5],
+  [/sonnet-5/i, 2, 0.2],
+  [/sonnet-4-[56]/i, 3, 0.3],
+  [/haiku-5/i, 0.1, 0.01],
+  [/haiku-4-5/i, 1, 0.1],
 ]
+const OUTPUT_X = 5
+const MEMO_OUTPUT = 3_000 // shortcut: a memo's output, thinking included, is a guess; measure one memo turn's usage if it matters
 
-// What re-writing `tokens` into a cold cache costs at list price; undefined for a model the table does not know.
+// Input and cache-read prices per million tokens for a prompt of `tokens`; undefined for a model the table does not know.
+export function prices(model: string | undefined, tokens: number) {
+  if (!model) return undefined
+  if (/haiku-5/i.test(model) && tokens > 100_000) return { input: 0.5, read: 0.05 }
+  const row = PRICES.find(([re]) => re.test(model))
+  return row && { input: row[1], read: row[2] }
+}
+
+// What re-writing `tokens` into a cold cache costs at list price.
 export function rewriteUsd(model: string | undefined, tokens: number, ttlMs: number) {
-  const price = model && /haiku-5/i.test(model) && tokens > 100_000 ? 0.5 : model ? INPUT_USD.find(([re]) => re.test(model))?.[1] : undefined
-  return price === undefined ? undefined : (tokens / 1e6) * price * (ttlMs >= 60 * 60_000 ? 2 : 1.25)
+  const p = prices(model, tokens)
+  return p && (tokens / 1e6) * p.input * (ttlMs >= 60 * 60_000 ? 2 : 1.25)
+}
+
+// What the handoff memo costs: one request over the context, read from the cache or written again if it went cold,
+// and the memo it writes.
+export function memoUsd(model: string | undefined, tokens: number, isCold: boolean, ttlMs: number) {
+  const p = prices(model, tokens)
+  return p && (isCold ? rewriteUsd(model, tokens, ttlMs)! : (tokens / 1e6) * p.read) + (MEMO_OUTPUT / 1e6) * p.input * OUTPUT_X
 }
 
 // Drops the extras, then the model chip, then the cost, then 7d, until the line fits.
@@ -828,15 +864,27 @@ export function text(v: View): string {
   return chips.join('  ')
 }
 
-// The ⏳ chip's cells, so the line leaves it room: its text (a Hangul syllable or ⏳ two cells), border, padding and the gap.
+// Cells a text takes: a Hangul syllable or ⏳ two.
+const cells = (t: string) => [...t].reduce((n, c) => n + (/[가-힣⏳]/.test(c) ? 2 : 1), 0)
+
+// The ⏳ chip's cells, so the line leaves it room: its text, border, padding and the gap.
 function workCells(w: Work & { elapsed: number }) {
-  const t = `⏳ ${mmss(w.elapsed)} · 도구 ${w.tools}${w.agents ? ` · subagent ${w.agents} 실행 중` : ''}`
-  return [...t].reduce((n, c) => n + (/[가-힣⏳]/.test(c) ? 2 : 1), 0) + 5
+  return cells(`⏳ ${mmss(w.elapsed)} · 도구 ${w.tools}${w.agents ? ` · subagent ${w.agents} 실행 중` : ''}`) + 5
+}
+
+// The clean-up buttons: a pressed one says it waits for the turn or runs; the memo says what it costs.
+function actionLabels(v: View) {
+  const state = work ? '대기 중' : '실행 중'
+  return {
+    compact: pressed.has('compact') ? `/compact ${state}` : '/compact',
+    handoff: pressed.has('handoff') ? `인계 메모 ${state}` : `인계 메모${v.ctx?.memoUsd ? ` ≈$${v.ctx.memoUsd}` : ''}`,
+  }
 }
 
 function width(v: View) {
-  // borders, padding, the bars drawn wider than their two glyphs, the ▾ button and the compact buttons
-  return [...text(v)].length + 24 + (v.ctx?.offerActions ? 32 + (pressed.has('compact') ? 8 : 0) : 0)
+  // borders, padding, the bars drawn wider than their two glyphs, the ▾ button and the clean-up buttons with their gaps
+  const a = actionLabels(v)
+  return [...text(v)].length + 24 + (v.ctx?.offerActions ? cells(a.compact) + cells(a.handoff) + 4 : 0)
 }
 
 type Actions = { keepWarm: () => void; compact: () => void; handoff: () => void; toggle: () => void }
@@ -899,9 +947,9 @@ function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working: (Wor
     chips.push(chip('token-gauge-work', C.yellow, kids))
   }
   if (v.ctx?.offerActions && !working && !isYielding) {
-    const state = work ? '대기 중' : '실행 중' // a pressed button: waiting for the turn, or running
-    chips.push(<Button key="token-gauge-compact" label={pressed.has('compact') ? `/compact ${state}` : '/compact'} onPress={act.compact} />)
-    chips.push(<Button key="token-gauge-handoff" label={pressed.has('handoff') ? `인계 메모 ${state}` : '인계 메모 후 새 세션'} onPress={act.handoff} />)
+    const a = actionLabels(v)
+    chips.push(<Button key="token-gauge-compact" label={a.compact} onPress={act.compact} />)
+    chips.push(<Button key="token-gauge-handoff" label={a.handoff} onPress={act.handoff} />)
   }
   if (!isYielding) chips.push(<Button key="token-gauge-more" label={showDetail ? '▴ 접기' : '▾ 상세'} hotkey="d" plain dimColor onPress={act.toggle} />)
 

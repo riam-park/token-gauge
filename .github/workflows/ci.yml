@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 10
     env:
       # The version the mod was last checked on in the Desktop app. Bump on purpose, with README's tested section.
-      CLAUDE_CODE_VERSION: 2.1.304
+      CLAUDE_CODE_VERSION: 2.1.308
       DISABLE_AUTOUPDATER: 1
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: 1
     steps:
