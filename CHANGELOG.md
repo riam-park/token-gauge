@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-23
+
 ### 수정
 
 - `/compact`와 인계 메모 버튼: 누른 뒤 차례를 기다리거나 실행하는 동안 버튼 글자가 `대기 중`/`실행 중`으로 바뀝니다. 대기열에서 지워져 끝나지 않는 요청은 다음 턴이 끝날 때 풀어, 버튼이 "이미 눌렀습니다"에 묶이지 않습니다.
@@ -116,7 +118,8 @@
 - 캐시 10분 이하에서 `유지 90분` 버튼(cache-tax 연동), 작업 중 칩, 알림, `d` 단축키
 - 초보자용 README와 토큰·캐시 절약 가이드
 
-[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.5.0...HEAD
+[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.5.1...HEAD
+[1.5.1]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.5.1
 [1.5.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.5.0
 [1.4.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.4.0
 [1.3.1]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.3.1
