@@ -119,6 +119,7 @@ describe('token-gauge', () => {
       expect(await ui.find({ type: 'Text', text: '☀' })).toBeDefined() // the chips stay, a survey or not
       expect(await ui.find({ type: 'Text', text: /engine band/ })).toBeDefined() // stacked, not replaced
       expect(Boolean(await ui.find({ type: 'Svg' }))).toBe(surface === 'desktop')
+      expect(Boolean(await ui.find({ type: 'Text', text: '│' }))).toBe(surface === 'desktop') // 2026-10-24: one row high, no borders
       expect(Boolean(await ui.find({ type: 'Button', label: '▾ 상세' }))).toBe(!hasSurvey) // a survey keeps the row free of buttons
       expect(await ui.find({ type: 'Text', text: /^리셋/ })).toBeUndefined() // closed until pressed
       await ui.unmount()

@@ -383,7 +383,7 @@ export const register: Register = (on, options) => {
     if (e.surface === 'desktop') seenDesktop = true
     if (e.surface === 'desktop' && cfg.desktopSpot === 'below') return rest // the footer line stands in for the band
     // A survey (a question in the band) keeps the chip row, without buttons or the detail panel, so the question keeps the room
-    const band = await bandTree($, $.ui.resolve(e), e.surface === 'terminal', e.props.bodyColumns - 2, e.props.isWorking ? 'working' : 'idle', e.props.hasSurvey)
+    const band = await bandTree($, $.ui.resolve(e), e.surface === 'terminal', e.surface !== 'terminal', e.props.bodyColumns - 2, e.props.isWorking ? 'working' : 'idle', e.props.hasSurvey)
     if (!band) return rest
     return { type: 'Box', props: { flexDirection: 'column' }, children: rest ? [band, rest] : [band] }
   })
@@ -396,14 +396,15 @@ export const register: Register = (on, options) => {
     if (!rest) return rest // the engine's node stands once, nothing below it
     const columns = (e.viewport?.columns ?? QUESTION_COLUMNS) - 2
     const ui = $.ui.resolve(e)
-    const band = e.surface === 'terminal' ? questionLine(ui, fit(view(snap, await $.clock.now(), false), QUESTION_LINE)) : await bandTree($, ui, true, columns, 'question', true)
+    const band = e.surface === 'terminal' ? questionLine(ui, fit(view(snap, await $.clock.now(), false), QUESTION_LINE)) : await bandTree($, ui, true, true, columns, 'question', true)
     if (!band) return rest
     return { type: 'Box', props: { flexDirection: 'column' }, children: [band, rest] }
   }).catch(async ($, e, next) => next(e)) // never in the way of a question
 }
 
 // The chip row (and the detail panel when open) for one site; undefined with nothing to show yet.
-async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, columns: number, state: 'idle' | 'working' | 'question', isYielding: boolean) {
+// `flat`: chips with no border, split by a dim bar, one row high (the graphical surfaces).
+async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, flat: boolean, columns: number, state: 'idle' | 'working' | 'question', isYielding: boolean) {
   const now = await $.clock.now()
   const working = state === 'working' && work ? { ...work, elapsed: now - work.since } : undefined
   const room = columns - (working ? workCells(working) : 0)
@@ -425,7 +426,7 @@ async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, colu
       $.ui.invalidate('ui.render')
     },
   }
-  return draw(ui, v, textBars, act, working, isYielding)
+  return draw(ui, v, textBars, flat, act, working, isYielding)
 }
 
 // A clean-up button only writes its request into the prompt box: the person sends it, edits it or clears it.
@@ -906,7 +907,7 @@ function width(v: View) {
 
 type Actions = { keepWarm: () => void; compact: () => void; handoff: () => void; toggle: () => void }
 
-function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working: (Work & { elapsed: number }) | undefined, isYielding: boolean) {
+function draw(ui: any, v: View, isTerminal: boolean, flat: boolean, act: Actions, working: (Work & { elapsed: number }) | undefined, isYielding: boolean) {
   const { Box, Text, Button, Svg } = ui
   const dim = (s: string) => <Text dimColor>{s}</Text>
   const num = (s: string, color?: string) => (
@@ -920,12 +921,18 @@ function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working: (Wor
     ) : (
       <Svg source={svgBar(b, cells * 8)} alt={`${Math.round(b.percent)}%`} width={cells * 8} height={8} />
     )
-  const chip = (key: string, color: string, kids: unknown[]) => (
-    <Box key={key} flexDirection="row" alignItems="center" gap={1} paddingX={1} borderStyle="round" borderColor={color}>
-      {kids}
-    </Box>
-  )
+  const chip = (key: string, color: string, kids: unknown[]) =>
+    flat ? (
+      <Box key={key} flexDirection="row" alignItems="center" gap={1}>
+        {kids}
+      </Box>
+    ) : (
+      <Box key={key} flexDirection="row" alignItems="center" gap={1} paddingX={1} borderStyle="round" borderColor={color}>
+        {kids}
+      </Box>
+    )
   const chips: unknown[] = []
+  const buttons: unknown[] = []
   if (v.plan) {
     const p = v.plan
     const kids: unknown[] = [dim('plan')]
@@ -965,14 +972,15 @@ function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working: (Wor
   }
   if (v.ctx?.offerActions && !working && !isYielding) {
     const a = actionLabels(v)
-    chips.push(<Button key="token-gauge-compact" label={a.compact} onPress={act.compact} />)
-    chips.push(<Button key="token-gauge-handoff" label={a.handoff} onPress={act.handoff} />)
+    buttons.push(<Button key="token-gauge-compact" label={a.compact} onPress={act.compact} />)
+    buttons.push(<Button key="token-gauge-handoff" label={a.handoff} onPress={act.handoff} />)
   }
-  if (!isYielding) chips.push(<Button key="token-gauge-more" label={showDetail ? '▴ 접기' : '▾ 상세'} hotkey="d" plain dimColor onPress={act.toggle} />)
+  if (!isYielding) buttons.push(<Button key="token-gauge-more" label={showDetail ? '▴ 접기' : '▾ 상세'} hotkey="d" plain dimColor onPress={act.toggle} />)
+  const split = flat ? chips.flatMap((c, i) => (i ? [<Text key={`token-gauge-bar-${i}`} dimColor>│</Text>, c] : [c])) : chips
 
   const rows: unknown[] = [
     <Box key="token-gauge-chips" flexDirection="row" alignItems="center" gap={1}>
-      {chips}
+      {[...split, ...buttons]}
     </Box>,
   ]
   if (showDetail && !isYielding) {
