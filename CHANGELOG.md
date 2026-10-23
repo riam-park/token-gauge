@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-23
+
 ### 수정
 
 - 아주 좁은 터미널(약 90칸 미만)에서 칩을 접어도 넘쳐 칩 줄이 깨지던 문제: 그 폭에서는 질문 카드 위 줄과 같은 한 줄 글자로 보입니다. 작업 중이면 `⏳` 경과 시간도 붙습니다.
@@ -110,7 +112,8 @@
 - 캐시 10분 이하에서 `유지 90분` 버튼(cache-tax 연동), 작업 중 칩, 알림, `d` 단축키
 - 초보자용 README와 토큰·캐시 절약 가이드
 
-[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.4.0...HEAD
+[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.5.0...HEAD
+[1.5.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.5.0
 [1.4.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.4.0
 [1.3.1]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.3.1
 [1.3.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.3.0
