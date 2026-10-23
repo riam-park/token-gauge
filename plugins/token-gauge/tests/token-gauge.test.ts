@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { advice, calibrate, configure, droppedBy, estimate, fit, fnv, forecastText, handoffText, hitRate, isNewer, itemLabel, keepwarmHold, largest, latestVersion, lostFiles, modelName, pace, pdfPages, readKind, redact, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
+import { advice, calibrate, cardText, configure, droppedBy, estimate, fit, fnv, forecastText, handoffText, hitRate, isNewer, itemLabel, keepwarmHold, koDuration, largest, latestVersion, lostFiles, modelName, pace, pdfPages, readKind, redact, rewriteUsd, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
 import type { Snapshot } from '../hooks/register'
 
 const NOW = Date.parse('2026-10-22T00:00:00Z')
@@ -362,6 +362,20 @@ describe('token-gauge', () => {
     await ui.unmount()
   })
 
+  test('the card in Korean for cache-tax, any other reason as it came; the cold cache priced', () => {
+    expect(koDuration('38h39m')).toBe('38시간 39분')
+    expect(koDuration('3h00m')).toBe('3시간')
+    expect(koDuration('5m')).toBe('5분')
+    expect(koDuration('2d4h')).toBe('2일 4시간')
+    expect(koDuration('soon')).toBe('soon')
+    expect(cardText('guard', 'guard: not on Fridays')).toEqual({ question: 'guard 플러그인이 이 프롬프트를 막았습니다.\nnot on Fridays\n그래도 보낼까요? 취소하면 입력창에 되돌립니다.', cost: undefined })
+    expect(Math.round(rewriteUsd('claude-opus-5-5', 252_672, 60 * MIN)! * 100)).toBe(202) // as cache-tax prices it: $8/MTok for the 1-hour cache
+    expect(rewriteUsd('claude-sonnet-5-5[1m]', 1_000_000, 5 * MIN)).toBe(2.5)
+    expect(rewriteUsd('claude-3-opus', 1_000, 60 * MIN)).toBeUndefined()
+    const v = view({ ...calm, tokens: 252_672, model: 'claude-opus-5-5', lastRequestAt: NOW - 2 * 60 * MIN }, NOW, false)
+    expect(v.cache?.rewrite).toBe('재기록 ~253k ≈$2.02')
+  })
+
   test('a dropped prompt: the plugin that dropped it, and the hold cache-tax promises', () => {
     const trace = [
       { plugin: 'cache-tax', outcome: 'returned', returned: { drop: 'cache-tax: cold' } },
@@ -377,8 +391,8 @@ describe('token-gauge', () => {
 
   // the desktop app hosts its sessions through the SDK: the person's typing arrives there as `sdk`
   for (const [choice, sent, filled, shown, surface, kind] of [
-    ['보내기', 1, 0, 'test: 확인을 받아 다시 보냅니다', 'terminal', 'composer'],
-    ['취소', 0, 1, 'test: 보내지 않고 입력창에 되돌렸습니다', 'desktop', 'sdk'],
+    ['보내기 ($2.02)', 1, 0, 'token-gauge: 보내기를 골라, test 플러그인이 막았던 프롬프트를 다시 보냅니다.', 'terminal', 'composer'],
+    ['취소', 0, 1, 'token-gauge: 보내지 않았습니다. 입력창에 되돌렸습니다.', 'desktop', 'sdk'],
   ] as const) {
     test(`a prompt another hook dropped is asked about before the drop shows (${choice}, ${surface})`, async ($: any, on: any) => {
       const clock = mock.clock(on, { now: NOW })
@@ -386,7 +400,8 @@ describe('token-gauge', () => {
       const submitted: any[] = []
       const fills: any[] = []
       const commands: any[] = []
-      const reason = 'test: the prompt cache went cold 5m ago. Send it again to pay it, and keepwarm will then hold the cache for 3h00m. Or /clear and start from a note.'
+      const toasts: string[] = []
+      const reason = 'test: the prompt cache went cold 38h39m ago. Sending this re-writes up to 252,672 tokens at $8/MTok = $2.02 (a warm turn would have cost $0.05). Send it again to pay it, and keepwarm will then hold the cache for 3h00m. Or /clear and start from a note.'
       on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
       on('prompt.submit', (_$: any, e: any) => {
         if (e.origin.kind === 'plugin') {
@@ -409,19 +424,41 @@ describe('token-gauge', () => {
         return { text: 'ok' }
       })
       on('session.surfaces', () => ({ value: [surface] }))
+      on('ui.toast', (_$: any, e: any) => {
+        toasts.push(e.text)
+        return { value: undefined }
+      })
       await $.session.start({ surface, isInteractive: true, cwd: '/w' })
       const r = await $.prompt.submit({ text: '이어서 해 줘', origin: { kind } })
       expect(r.drop).toBe(shown) // the card's answer, not the hook's warning
       await clock.advance(1) // the send waits for a timer past the hook
       for (let i = 0; i < 50 && submitted.length + fills.length === 0; i++) await new Promise(res => setTimeout(res, 1))
       expect(asked.length).toBe(1)
-      expect(asked[0].questions[0].question).toMatch(/^test: the prompt cache went cold .+ 그래도 보낼까요\? 취소하면 입력창에 되돌립니다\.$/)
+      expect(asked[0].questions[0]).toMatchObject({ header: 'token-gauge', question: 'test 플러그인이 이 프롬프트를 막았습니다.\n프롬프트 캐시가 38시간 39분 전에 식어서, 지금 보내면 252,672토큰을 다시 기록합니다: $2.02 (캐시가 살아 있었으면 $0.05)\n보내면 test의 /keepwarm이 3시간 동안 캐시를 유지합니다.\n그래도 보낼까요? 취소하면 입력창에 되돌립니다.' }) // whose card, and the reason in Korean
       expect(submitted.length).toBe(sent)
       expect(fills.length).toBe(filled)
       if (sent) expect(commands).toMatchObject([{ command: 'keepwarm', args: '3h00m' }])
+      if (sent) expect(toasts).toContain('다시 보냈습니다 · /keepwarm으로 3시간 동안 캐시를 유지합니다')
       if (filled) expect(fills[0]).toMatchObject({ text: '이어서 해 줘', mode: 'replace' })
     })
   }
+
+  // a prompt that went through with no cache-tax link beneath, while /keepwarm is there: cache-tax sits outside
+  test('cache-tax outside token-gauge: warned once, on the first prompt that goes through', async ($: any, on: any) => {
+    const toasts: string[] = []
+    on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+    on('prompt.submit', (_$: any, e: any) => ({ text: e.text }))
+    on('command.list', () => ({ value: [{ name: 'keepwarm' }] }))
+    on('ui.toast', (_$: any, e: any) => {
+      toasts.push(e.text)
+      return { value: undefined }
+    })
+    await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/w' })
+    await $.prompt.submit({ text: 'a', origin: { kind: 'composer' } })
+    await $.prompt.submit({ text: 'b', origin: { kind: 'composer' } })
+    for (let i = 0; i < 50 && toasts.length === 0; i++) await new Promise(res => setTimeout(res, 1))
+    expect(toasts.filter(t => t.startsWith('cache-tax가 token-gauge보다 먼저 실행되어')).length).toBe(1)
+  })
 
   test('a plain -p run: a dropped sdk prompt keeps its drop and asks nothing', async ($: any, on: any) => {
     const asked: any[] = []

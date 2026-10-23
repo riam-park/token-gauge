@@ -173,6 +173,7 @@ let calledServers = new Set<string>()
 let mainTurns = 0
 let inWindow: { mcp: McpTool[]; memory: MemoryFile[] } = { mcp: [], memory: [] }
 let advised = new Set<string>()
+let orderChecked = false
 
 function forget() {
   turnBase = undefined
@@ -323,6 +324,10 @@ export const register: Register = (on, options) => {
   // count against the hook's time; the drop then shown is the answer's short line.
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
+    if (!orderChecked && result.drop === undefined) {
+      orderChecked = true
+      void warnIfCacheTaxAbove($, next.trace).catch(() => {})
+    }
     if (result.drop === undefined || e.command || e.isMeta || !(await typedByPerson($, e.origin.kind))) return result
     const by = droppedBy(next.trace)
     return by ? { drop: await askDropped($, e.text, by, result.drop) } : result
@@ -550,19 +555,53 @@ async function typedByPerson($: EngineInterface, kind: string) {
   return PERSON.has(kind) || (kind === 'sdk' && (await $.session.surfaces().catch(() => [])).length > 0)
 }
 
-// The person's choice, and the line their drop shows for it. Sending goes out as the plugin's own prompt, which
-// cache-tax lets through, once this drop has settled (a timer, past this hook). Anything else (cancel, text typed under Other) goes back in
-// the box; a card never answered (dismissed, or no surface to ask on) keeps the hook's own reason.
+// The person's choice, and the line their drop shows for it. The card is headed token-gauge and names the plugin that
+// dropped the prompt, its reason in Korean when it is cache-tax's (cardText). Sending goes out as the plugin's own
+// prompt, which cache-tax lets through, once this drop has settled (a timer, past this hook). Anything else (cancel,
+// text typed under Other) goes back in the box; a card never answered (dismissed, or no surface to ask on) keeps the
+// hook's own reason.
 async function askDropped($: EngineInterface, text: string, by: string, reason: string) {
-  const why = reason.startsWith(`${by}:`) ? reason.slice(by.length + 1).trimStart() : reason // the card names the plugin already
-  const question = `${by}: ${why.length > 600 ? `${why.slice(0, 599)}…` : why} 그래도 보낼까요? ${PUT_BACK}하면 입력창에 되돌립니다.`
-  const answer = await $.ui.ask(question, { options: [SEND_ANYWAY, PUT_BACK], header: '보내기 확인' }).catch(() => undefined)
-  if (answer === SEND_ANYWAY) {
+  const card = cardText(by, reason)
+  const send = card.cost ? `${SEND_ANYWAY} ($${card.cost})` : SEND_ANYWAY
+  const answer = await $.ui.ask(card.question, { options: [send, PUT_BACK], header: 'token-gauge' }).catch(() => undefined)
+  if (answer === send) {
     $.clock.after(0, () => void sendAnyway($, text, reason).catch(() => {})) // a submit from inside prompt.submit would wait on this one
-    return `${by}: 확인을 받아 다시 보냅니다`
+    return `token-gauge: 보내기를 골라, ${by} 플러그인이 막았던 프롬프트를 다시 보냅니다.`
   }
   await $.prompt.fill({ text: answer && answer !== PUT_BACK ? answer : text, mode: 'replace' }).catch(() => {})
-  return answer ? `${by}: 보내지 않고 입력창에 되돌렸습니다` : reason
+  return answer ? 'token-gauge: 보내지 않았습니다. 입력창에 되돌렸습니다.' : reason
+}
+
+// The card's question: who dropped the prompt, why (cache-tax's English reason read into Korean; any other reason as
+// it came), and what cancelling does. `cost` is what sending costs, when the reason says.
+export function cardText(by: string, reason: string) {
+  const why = reason.startsWith(`${by}:`) ? reason.slice(by.length + 1).trimStart() : reason
+  const m = /went cold (\S+) ago\. Sending this re-writes up to ([\d,]+) tokens at \$[\d.]+\/MTok = \$([\d.]+) \(a warm turn would have cost \$([\d.]+)\)/.exec(why)
+  const hold = keepwarmHold(why)
+  const lines = [`${by} 플러그인이 이 프롬프트를 막았습니다.`]
+  if (m) {
+    lines.push(`프롬프트 캐시가 ${koDuration(m[1]!)} 전에 식어서, 지금 보내면 ${m[2]}토큰을 다시 기록합니다: $${m[3]} (캐시가 살아 있었으면 $${m[4]})`)
+    if (hold) lines.push(`보내면 ${by}의 /keepwarm이 ${koDuration(hold)} 동안 캐시를 유지합니다.`)
+  } else lines.push(why.length > 600 ? `${why.slice(0, 599)}…` : why)
+  lines.push(`그래도 보낼까요? ${PUT_BACK}하면 입력창에 되돌립니다.`)
+  return { question: lines.join('\n'), cost: m?.[3] }
+}
+
+// 38h39m -> 38시간 39분, 3h00m -> 3시간, 5m -> 5분; anything else as it came.
+export function koDuration(d: string) {
+  const parts = /^(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?$/.exec(d)
+  if (!parts || !d) return d
+  const [, days, hours, mins] = parts.map(n => Number(n) || 0)
+  return [days && `${days}일`, hours && `${hours}시간`, mins && `${mins}분`].filter(Boolean).join(' ') || '0분'
+}
+
+// cache-tax drops a cold prompt and answers without passing it on, so the card needs token-gauge's hook outside its
+// own. A prompt that went through and saw no cache-tax link beneath, while /keepwarm (cache-tax's) is there, means
+// cache-tax sits outside: say so once.
+async function warnIfCacheTaxAbove($: EngineInterface, trace: readonly { plugin: string }[]) {
+  if (!cfg.alerts || trace.some(t => t.plugin === 'cache-tax')) return
+  if (!JSON.stringify(await $.command.list().catch(() => [])).includes('"keepwarm"')) return
+  $.ui.toast('cache-tax가 token-gauge보다 먼저 실행되어, 막힌 프롬프트 확인 카드가 뜨지 않습니다 · CLAUDE_CODE_PLUGIN_DIRS나 enabledPlugins에서 token-gauge를 앞에 두고 새 세션을 여세요', { timeoutMs: 15_000 })
 }
 
 // So the cache hold the drop promised is asked of /keepwarm here.
@@ -574,7 +613,8 @@ async function sendAnyway($: EngineInterface, text: string, reason: string) {
     return
   }
   const hold = keepwarmHold(reason)
-  if (hold && JSON.stringify(await $.command.list().catch(() => [])).includes('"keepwarm"')) await $.command.run({ command: 'keepwarm', args: hold }).catch(() => {})
+  const kept = hold && JSON.stringify(await $.command.list().catch(() => [])).includes('"keepwarm"') && (await $.command.run({ command: 'keepwarm', args: hold }).then(() => true).catch(() => false))
+  $.ui.toast(kept ? `다시 보냈습니다 · /keepwarm으로 ${koDuration(hold!)} 동안 캐시를 유지합니다` : '다시 보냈습니다')
 }
 
 // A tip toast, once per key a session, when alerts are on.
@@ -680,7 +720,8 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
     const left = expires - now
     const rate = s.cache.total ? ` · 적중률 ${Math.round((s.cache.read / s.cache.total) * 100)}% · 재기록 ${s.cache.rewrites}회` : ''
     if (left <= 0) {
-      v.cache = { color: C.red, text: 'cold', isCold: true, rewrite: s.tokens ? `재기록 ~${short(s.tokens)}` : undefined, offerKeep: false }
+      const usd = cfg.showCost && s.tokens ? rewriteUsd(s.model, s.tokens, cfg.cacheTtlMs) : undefined
+      v.cache = { color: C.red, text: 'cold', isCold: true, rewrite: s.tokens ? `재기록 ~${short(s.tokens)}${usd === undefined ? '' : ` ≈$${usd.toFixed(2)}`}` : undefined, offerKeep: false }
       v.detail.push({ label: '캐시', text: `만료됨 · 다음 메시지가 컨텍스트 전체를 다시 기록${rate}` })
     } else {
       const sec = Math.ceil(left / 1000)
@@ -694,6 +735,25 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
     }
   }
   return v
+}
+
+// Base input price per million tokens by model id (platform.claude.com pricing, 2026-10). Writing the cache costs 2x that
+// for the 1-hour cache, 1.25x for the 5-minute one.
+// shortcut: older models (Opus 4.1 and before, Sonnet 3.x) are left out and show no cost; Haiku 5.5 past 100K tokens costs more; add rows as models ship
+const INPUT_USD: [RegExp, number][] = [
+  [/fable|mythos/i, 10],
+  [/opus-5-5/i, 4],
+  [/opus-(5|4-[5-8])/i, 5],
+  [/sonnet-5/i, 2],
+  [/sonnet-4-[56]/i, 3],
+  [/haiku-5/i, 0.1],
+  [/haiku-4-5/i, 1],
+]
+
+// What re-writing `tokens` into a cold cache costs at list price; undefined for a model the table does not know.
+export function rewriteUsd(model: string | undefined, tokens: number, ttlMs: number) {
+  const price = model ? INPUT_USD.find(([re]) => re.test(model))?.[1] : undefined
+  return price === undefined ? undefined : (tokens / 1e6) * price * (ttlMs >= 60 * 60_000 ? 2 : 1.25)
 }
 
 // Drops the extras, then the model chip, then the cost, then 7d, until the line fits.
