@@ -116,11 +116,11 @@ describe('token-gauge', () => {
       on('ui.render', ($$: any, e: any) => $$.ui.resolve(e).Text({ children: 'engine band' }))
       await $.session.start({ surface, isInteractive: true, cwd: '/work' })
       const ui = await $.ui.mount({ plugin: 'token-gauge', surface, component: 'AbovePrompt', props: { hasSurvey, isWorking: false, maxRows: 10, bodyColumns: 160 } })
-      expect(await ui.find({ type: 'Text', text: '☀' })).toBeDefined() // the chips stay, a survey or not
+      // the chips stay, a survey or not; 2026-10-24: on the desktop the band is the line under the prompt, one row high
+      expect(await ui.find({ type: 'Text', text: surface === 'terminal' ? '☀' : /^🟢 5h 5% ↻2h52 · 🟢 7d 38% ↻3d0h · \$1\.27 · 🟢 ctx 113k\/1M 11%$/ })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: /engine band/ })).toBeDefined() // stacked, not replaced
-      expect(Boolean(await ui.find({ type: 'Svg' }))).toBe(surface === 'desktop')
-      expect(Boolean(await ui.find({ type: 'Text', text: '│' }))).toBe(surface === 'desktop') // 2026-10-24: one row high, no borders
-      expect(Boolean(await ui.find({ type: 'Button', label: '▾ 상세' }))).toBe(!hasSurvey) // a survey keeps the row free of buttons
+      expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+      expect(Boolean(await ui.find({ type: 'Button', text: '▾ 상세' }))).toBe(!hasSurvey) // a survey keeps the row free of buttons
       expect(await ui.find({ type: 'Text', text: /^리셋/ })).toBeUndefined() // closed until pressed
       await ui.unmount()
     })
@@ -371,7 +371,7 @@ describe('token-gauge', () => {
     expect(await ui.find({ type: 'Text', text: '⏳ ' })).toBeDefined()
     await ui.unmount()
     ui = await band(false, 160)
-    expect(await ui.find({ type: 'Button', label: '▾ 상세' })).toBeDefined() // wide enough: the chips as before
+    expect(await ui.find({ type: 'Button', text: '▾ 상세' })).toBeDefined() // wide enough: the chips as before
     await ui.unmount()
   })
 
@@ -594,7 +594,7 @@ describe('token-gauge', () => {
     await ui.press({ key: 'token-gauge-handoff' })
     expect(filled).toEqual(['replace: /compact', `replace: ${handoffText('')}`])
     expect(sent).toEqual([])
-    expect(await ui.find({ type: 'Button', label: '/compact' })).toBeDefined() // no waiting state
+    expect(await ui.find({ type: 'Button', text: '/compact' })).toBeDefined() // no waiting state
     isFilled = false // a dialog holds the keys
     await ui.press({ key: 'token-gauge-compact' })
     expect(toasts).toEqual(['입력창에 넣지 못했습니다'])
@@ -602,22 +602,23 @@ describe('token-gauge', () => {
   })
 
   // 2026-10-24: the desktop hides the band under its next-step box; the footer under the prompt stays
-  test('the footer line: each part led by its chip color as a dot', () => {
-    expect(footerLine(view(calm, NOW, false))).toBe('🟢 5h 5% · 🟢 7d 38% · 🟢 ctx 11% · 🔵 ❄ 59:06')
+  test('the footer line: the chips but the model, each led by its chip color as a dot', () => {
+    expect(footerLine(view(calm, NOW, false))).toBe('🟢 5h 5% ↻2h52 · 🟢 7d 38% ↻3d0h · $1.27 · 🟢 ctx 113k/1M 11% ▲1.3k ≈ 675턴 · 🔵 ❄ 59:06')
     const limits = [
       { kind: 'five_hour', percentUsed: 80, resetsAt: at(172 * MIN) },
       { kind: 'seven_day', percentUsed: 95, resetsAt: at(3 * 24 * 60 * MIN) },
     ]
     const busy: Snapshot = { ...calm, limits, tokens: 800_000, lastRequestAt: NOW - 55 * MIN }
-    expect(footerLine(view(busy, NOW, false))).toBe('🟡 5h 80% · 🔴 7d 95% · 🟠 ctx 80% · 🟡 ❄ 5:00')
-    expect(footerLine(view({ ...busy, lastRequestAt: NOW - 2 * 60 * MIN }, NOW, false))).toMatch(/ · 🔴 ❄ cold$/)
+    expect(footerLine(view(busy, NOW, false))).toMatch(/^🟡 5h 80% ↻2h52 · 🔴 7d 95% ↻3d0h · \$1\.27 · 🟠 ctx 800k\/1M 80% ▲1\.3k ≈ \d+턴 · 🟡 ❄ 5:00$/)
+    expect(footerLine(view({ ...busy, lastRequestAt: NOW - 2 * 60 * MIN }, NOW, false))).toMatch(/ · 🔴 ❄ cold 재기록 ~800k$/)
+    expect(footerLine(view(calm, NOW, false), { since: 0, elapsed: 7_000, tools: 1, agents: 1 })).toMatch(/ · ⏳ 0:07 도구 1 subagent 1$/) // while Claude works
     expect(footerLine(view({ ...calm, limits: [], costUsd: undefined, tokens: undefined, lastRequestAt: undefined }, NOW, false))).toBeUndefined()
   })
 
   const settle = async () => {
     for (let i = 0; i < 10; i++) await new Promise(res => setTimeout(res, 1))
   }
-  const LINE = '🟢 5h 5% · 🟢 7d 38% · 🟢 ctx 11%'
+  const LINE = '🟢 5h 5% ↻2h52 · 🟢 7d 38% ↻3d0h · 🟢 ctx 113k/1M 11%'
   function footerEngine(on: any) {
     const lines: (string | undefined)[] = []
     on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
@@ -633,7 +634,7 @@ describe('token-gauge', () => {
 
   for (const [spot, surface, hasBand, hasLine] of [
     ['below', 'desktop', false, true],
-    ['both', 'desktop', true, true],
+    ['above', 'desktop', true, false],
     ['below', 'terminal', true, false],
   ] as const) {
     test(`desktopSpot ${spot} on the ${surface}: band ${hasBand ? 'drawn' : 'left out'}, footer line ${hasLine ? 'written' : 'none'}`, { options: { desktopSpot: spot } }, async ($: any, on: any) => {
@@ -641,7 +642,7 @@ describe('token-gauge', () => {
       const lines = footerEngine(on)
       await $.session.start({ surface, isInteractive: false, cwd: '/w' })
       const ui = await $.ui.mount({ plugin: 'token-gauge', surface, component: 'AbovePrompt', props: BAND })
-      expect(Boolean(await ui.find({ type: 'Text', text: '☀' }))).toBe(hasBand)
+      expect(Boolean(await ui.find({ type: 'Button', text: '▾ 상세' }))).toBe(hasBand)
       expect(await ui.find({ type: 'Text', text: 'engine AbovePrompt' })).toBeDefined() // what others draw stays
       await clock.advance(1000)
       await settle()
@@ -671,5 +672,28 @@ describe('token-gauge', () => {
     await settle()
     expect(lines.at(-1)).toBeUndefined()
     await ui.unmount()
+  })
+
+  test('/token-gauge opens the detail pane: the parts one to a row, the details as paragraphs, every button', async ($: any, on: any) => {
+    engine(on)
+    const opened: string[] = []
+    on('command.register', () => ({ value: undefined }))
+    on('ui.open', (_$: any, e: any) => {
+      opened.push(e.id)
+      return { value: { isPlaced: true } }
+    })
+    await $.session.start({ surface: 'desktop', isInteractive: false, cwd: '/w' })
+    const r = await $.command.run({ command: 'token-gauge', args: '' })
+    expect(opened).toEqual(['token-gauge'])
+    expect(r.text).toBe('token-gauge 상세 패널을 열었습니다')
+    const props = { title: 'token-gauge', isFocused: false, bodyColumns: 36, placement: 'dock', scroll: { bodyRows: 40 }, view: {} }
+    const pane = await $.ui.mount({ plugin: 'token-gauge', surface: 'desktop', component: 'Pane', requestId: 'token-gauge', props })
+    expect(await pane.find({ type: 'Text', text: '🟢 5h 5% ↻2h52' })).toBeDefined() // a part to a row
+    expect(await pane.find({ type: 'Text', text: '🟢 ctx 113k/1M 11%' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^5h 리셋 / })).toBeDefined() // the label leads its paragraph
+    expect(await pane.find({ type: 'Button', text: '/compact' })).toBeDefined() // the buttons whatever the context
+    expect(await pane.find({ type: 'Button', text: /^인계 메모/ })).toBeDefined()
+    expect(await pane.find({ type: 'Button', text: '유지 90분' })).toBeUndefined() // no cache-tax, no hold
+    await pane.unmount()
   })
 })

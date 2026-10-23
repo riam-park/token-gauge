@@ -45,8 +45,8 @@
     "desktopSpot": {
       "type": "string",
       "title": "데스크톱 표시 위치",
-      "description": "데스크톱 앱에서 칩을 어디에 보일지. above: 입력창 위 칩 줄(다음 단계 상자가 칩 줄을 가리는 동안은 입력창 밑에 한 줄로). both: 칩 줄과 입력창 밑 한 줄을 늘 함께. below: 입력창 밑 한 줄만(버튼과 ▾ 상세 없음). 터미널은 늘 칩 줄입니다.",
-      "options": ["above", "both", "below"],
+      "description": "데스크톱 앱에서 한도, 컨텍스트, 캐시 줄을 입력창 위(above)에 둘지 아래(below)에 둘지. 두 자리 모두 같은 글입니다. above도 다음 단계 상자가 가리는 동안은 아래에 보입니다. 상세와 버튼은 /token-gauge 패널에 있습니다. 터미널은 늘 위입니다.",
+      "options": ["above", "below"],
       "default": "above"
     }
   }

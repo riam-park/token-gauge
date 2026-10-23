@@ -43,11 +43,12 @@ const SEND_ANYWAY = '보내기'
 const PUT_BACK = '취소'
 const QUESTION_LINE = 80 // the terminal's line above a question: two of its 40-column rows
 const NEXT_STEP_TOOL = 'mcp__ccd_turn__wrap_up' // the desktop app's turn-end summary; with a question it is the next-step box
+const PANE = 'token-gauge' // the detail pane's id
 
 // The userConfig options in plugin.json, asked at install and changed with /plugin configure or /config.
 // handoffDir '' asks for the handoff memo in the answer; a folder asks for a PROMPT file there.
-// desktopSpot: on the desktop, the chip band above the prompt, one line in the footer under it (`below`), or both.
-export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string; desktopSpot: 'above' | 'both' | 'below' }
+// desktopSpot: on the desktop, the band above the prompt or the line in the footer under it (`below`).
+export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string; desktopSpot: 'above' | 'below' }
 const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', desktopSpot: 'above' }
 let cfg = DEFAULTS
 
@@ -61,7 +62,7 @@ export function configure(o: Record<string, unknown>): Config {
     showCost: o.showCost !== false,
     alerts: o.alerts !== false,
     handoffDir: dir,
-    desktopSpot: o.desktopSpot === 'both' || o.desktopSpot === 'below' ? o.desktopSpot : 'above',
+    desktopSpot: o.desktopSpot === 'below' ? 'below' : 'above',
   }
   return cfg
 }
@@ -233,7 +234,21 @@ export const register: Register = (on, options) => {
     await readContext($, false).catch(() => {})
     await readToday($).catch(() => {})
     if (e.isInteractive && cfg.alerts) void checkUpdate($).catch(() => {}) // offline or blocked: no toast
+    await $.command.register({ name: 'token-gauge', description: 'token-gauge 상세 패널 열기(다음 단계 박스가 떠도 남음)' }).catch(() => {})
     return result
+  })
+
+  // /token-gauge opens the detail pane: the place for the details and the buttons when the band is not there.
+  on('command.run', { command: 'token-gauge' }, async $ => {
+    void readToday($).then(() => $.ui.invalidate('ui.render')).catch(() => {})
+    const opened = await $.ui.open({ id: PANE, title: 'token-gauge' }).catch(() => undefined)
+    return { text: opened?.isPlaced ? 'token-gauge 상세 패널을 열었습니다' : `token-gauge 상세 패널을 열지 못했습니다${opened?.reason ? `: ${opened.reason}` : ''}` }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const now = await $.clock.now()
+    const working = work && { ...work, elapsed: now - work.since }
+    return paneTree($.ui.resolve(e), view(snap, now, hasKeepwarm), e.props.bodyColumns, actions($), working)
   })
 
   on('session.measure', async ($, e, next) => {
@@ -403,15 +418,19 @@ export const register: Register = (on, options) => {
 }
 
 // The chip row (and the detail panel when open) for one site; undefined with nothing to show yet.
-// `flat`: chips with no border, split by a dim bar, one row high (the graphical surfaces).
+// `flat`: the graphical surfaces' band, the line under the prompt as it reads there, whole (it wraps when narrow).
 async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, flat: boolean, columns: number, state: 'idle' | 'working' | 'question', isYielding: boolean) {
   const now = await $.clock.now()
   const working = state === 'working' && work ? { ...work, elapsed: now - work.since } : undefined
   const room = columns - (working ? workCells(working) : 0)
-  const v = fit(view(snap, now, hasKeepwarm), room)
+  const v = flat ? view(snap, now, hasKeepwarm) : fit(view(snap, now, hasKeepwarm), room)
   if (!v.plan && !v.ctx && !v.cache) return undefined
-  if (width(v) > room) return questionLine(ui, v, working) // too narrow for the chips even folded: one line of text, as above a question
-  const act = {
+  if (!flat && width(v) > room) return questionLine(ui, v, working) // too narrow for the chips even folded: one line of text, as above a question
+  return draw(ui, v, textBars, flat, actions($), working, isYielding)
+}
+
+function actions($: EngineInterface): Actions {
+  return {
     keepWarm: () => {
       $.command
         .run({ command: 'keepwarm', args: '90m' })
@@ -426,7 +445,6 @@ async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, flat
       $.ui.invalidate('ui.render')
     },
   }
-  return draw(ui, v, textBars, flat, act, working, isYielding)
 }
 
 // A clean-up button only writes its request into the prompt box: the person sends it, edits it or clears it.
@@ -867,20 +885,28 @@ export function text(v: View): string {
 // The footer under the prompt draws text alone: each part is led by its chip's color as a colored dot.
 const DOT: Record<string, string> = { [C.green]: '🟢', [C.cyan]: '🔵', [C.blue]: '🔵', [C.violet]: '🟣', [C.yellow]: '🟡', [C.orange]: '🟠', [C.red]: '🔴' }
 
-//   🟢 5h 10% · 🟡 7d 80% · 🟣 ctx 51% · 🔵 ❄ 60:00
-export function footerLine(v: View) {
+// The chips' parts but the model (the footer shows it beside), for the line under the prompt, the band on the
+// graphical surfaces and the pane alike.
+//   🟢 5h 17% ↻2h32 · 🟡 7d 82% ↻20h42 · $18.14 · 🟣 ctx 497k/1M 50% ▲1.3k ≈ 380턴 · 🔵 ❄ 60:00 · ⏳ 0:07 도구 1 subagent 1
+export function lineParts(v: View, working?: Work & { elapsed: number }) {
   const parts: string[] = []
-  if (v.plan?.five) parts.push(`${DOT[v.plan.five.color]} 5h ${v.plan.five.percent}%`)
-  if (v.plan?.seven) parts.push(`${DOT[v.plan.seven.color]} 7d ${v.plan.seven.percent}%`)
-  if (v.ctx) parts.push(`${DOT[v.ctx.color]} ctx ${v.ctx.percent}%`)
-  if (v.cache) parts.push(`${DOT[v.cache.color]} ❄ ${v.cache.text}`)
-  return parts.join(' · ') || undefined
+  const p = v.plan
+  if (p?.five) parts.push(`${DOT[p.five.color]} 5h ${p.five.percent}%${p.five.reset ? ` ↻${p.five.reset}` : ''}`)
+  if (p?.seven) parts.push(`${DOT[p.seven.color]} 7d ${p.seven.percent}%${p.seven.reset ? ` ↻${p.seven.reset}` : ''}`)
+  if (p?.cost) parts.push(p.cost)
+  if (v.ctx) parts.push([`${DOT[v.ctx.color]} ctx ${v.ctx.used}/${v.ctx.window} ${v.ctx.percent}%`, v.ctx.delta, v.ctx.turns].filter(Boolean).join(' '))
+  if (v.cache) parts.push([`${DOT[v.cache.color]} ❄ ${v.cache.text}`, v.cache.rewrite].filter(Boolean).join(' '))
+  if (working) parts.push(`⏳ ${mmss(working.elapsed)} 도구 ${working.tools}${working.agents ? ` subagent ${working.agents}` : ''}`)
+  return parts
 }
 
-// The footer line, on the desktop: always under `both` and `below`, under `above` while a next-step box hides the
-// band. Written each second it changes, the cache countdown with it.
+export const footerLine = (v: View, working?: Work & { elapsed: number }) => lineParts(v, working).join(' · ') || undefined
+
+// The footer line, on the desktop: always under `below`, under `above` while a next-step box hides the band.
+// Written each second it changes, the cache countdown and the ⏳ time with it.
 function writeFooter($: EngineInterface, now: number) {
-  const text = seenDesktop && (cfg.desktopSpot !== 'above' || turnCard) ? footerLine(view(snap, now, false)) : undefined
+  const working = work && { ...work, elapsed: now - work.since }
+  const text = seenDesktop && (cfg.desktopSpot === 'below' || turnCard) ? footerLine(view(snap, now, false), working) : undefined
   if (text === footerShown) return
   footerShown = text
   $.ui.status(text)
@@ -908,7 +934,39 @@ function width(v: View) {
 type Actions = { keepWarm: () => void; compact: () => void; handoff: () => void; toggle: () => void }
 
 function draw(ui: any, v: View, isTerminal: boolean, flat: boolean, act: Actions, working: (Work & { elapsed: number }) | undefined, isYielding: boolean) {
-  const { Box, Text, Button, Svg } = ui
+  const { Box, Text, Button } = ui
+  const keep = v.cache?.offerKeep && !isYielding ? <Button key="token-gauge-keep" label="유지 90분" onPress={act.keepWarm} /> : undefined
+  // the graphical surfaces draw the band as the line under the prompt, so the two read the same
+  const row = flat ? [<Text key="token-gauge-line" dimColor>{footerLine(v, working)}</Text>, ...(keep ? [keep] : [])] : chipRow(ui, v, isTerminal, keep, working)
+  if (v.ctx?.offerActions && !working && !isYielding) {
+    const a = actionLabels(v)
+    row.push(<Button key="token-gauge-compact" label={a.compact} onPress={act.compact} />)
+    row.push(<Button key="token-gauge-handoff" label={a.handoff} onPress={act.handoff} />)
+  }
+  if (!isYielding) row.push(<Button key="token-gauge-more" label={showDetail ? '▴ 접기' : '▾ 상세'} hotkey="d" plain dimColor onPress={act.toggle} />)
+
+  const rows: unknown[] = [
+    <Box key="token-gauge-chips" flexDirection="row" alignItems="center" gap={1}>
+      {row}
+    </Box>,
+  ]
+  if (showDetail && !isYielding) {
+    rows.push(
+      <Box key="token-gauge-detail" flexDirection="column" paddingX={1} paddingTop={1}>
+        {detailLines(ui, v, isTerminal, 420, false)}
+      </Box>,
+    )
+  }
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      {rows}
+    </Box>
+  )
+}
+
+// The terminal's chips, each in a border of its color; `keep` sits in the cache chip.
+function chipRow(ui: any, v: View, isTerminal: boolean, keep: unknown, working: (Work & { elapsed: number }) | undefined) {
+  const { Box, Text, Svg } = ui
   const dim = (s: string) => <Text dimColor>{s}</Text>
   const num = (s: string, color?: string) => (
     <Text color={color} tabular>
@@ -921,18 +979,12 @@ function draw(ui: any, v: View, isTerminal: boolean, flat: boolean, act: Actions
     ) : (
       <Svg source={svgBar(b, cells * 8)} alt={`${Math.round(b.percent)}%`} width={cells * 8} height={8} />
     )
-  const chip = (key: string, color: string, kids: unknown[]) =>
-    flat ? (
-      <Box key={key} flexDirection="row" alignItems="center" gap={1}>
-        {kids}
-      </Box>
-    ) : (
-      <Box key={key} flexDirection="row" alignItems="center" gap={1} paddingX={1} borderStyle="round" borderColor={color}>
-        {kids}
-      </Box>
-    )
+  const chip = (key: string, color: string, kids: unknown[]) => (
+    <Box key={key} flexDirection="row" alignItems="center" gap={1} paddingX={1} borderStyle="round" borderColor={color}>
+      {kids}
+    </Box>
+  )
   const chips: unknown[] = []
-  const buttons: unknown[] = []
   if (v.plan) {
     const p = v.plan
     const kids: unknown[] = [dim('plan')]
@@ -957,7 +1009,7 @@ function draw(ui: any, v: View, isTerminal: boolean, flat: boolean, act: Actions
     const k = v.cache
     const kids: unknown[] = [<Text color={k.color}>❄</Text>, num(k.text, k.isCold ? k.color : undefined)]
     if (k.rewrite) kids.push(dim(k.rewrite))
-    if (k.offerKeep && !isYielding) kids.push(<Button key="token-gauge-keep" label="유지 90분" onPress={act.keepWarm} />)
+    if (keep) kids.push(keep)
     chips.push(chip('token-gauge-cache', k.color, kids))
   }
   if (v.model) {
@@ -970,67 +1022,81 @@ function draw(ui: any, v: View, isTerminal: boolean, flat: boolean, act: Actions
     if (working.agents) kids.push(dim(`· subagent ${working.agents} 실행 중`))
     chips.push(chip('token-gauge-work', C.yellow, kids))
   }
-  if (v.ctx?.offerActions && !working && !isYielding) {
-    const a = actionLabels(v)
-    buttons.push(<Button key="token-gauge-compact" label={a.compact} onPress={act.compact} />)
-    buttons.push(<Button key="token-gauge-handoff" label={a.handoff} onPress={act.handoff} />)
-  }
-  if (!isYielding) buttons.push(<Button key="token-gauge-more" label={showDetail ? '▴ 접기' : '▾ 상세'} hotkey="d" plain dimColor onPress={act.toggle} />)
-  const split = flat ? chips.flatMap((c, i) => (i ? [<Text key={`token-gauge-bar-${i}`} dimColor>│</Text>, c] : [c])) : chips
+  return chips
+}
 
-  const rows: unknown[] = [
-    <Box key="token-gauge-chips" flexDirection="row" alignItems="center" gap={1}>
-      {[...split, ...buttons]}
-    </Box>,
-  ]
-  if (showDetail && !isYielding) {
-    const line = (label: string, kids: unknown[]) => (
+// The detail panel's lines with the context breakdown under its line: in a column of labels on the band, or as
+// paragraphs (`isParagraph`) in the narrow pane, where a wrapped line would leave its label behind.
+function detailLines(ui: any, v: View, isTerminal: boolean, stackWidth: number, isParagraph: boolean) {
+  const { Box, Text, Svg } = ui
+  const line = (label: string, kids: unknown[]) =>
+    isParagraph ? (
+      <Box key={`token-gauge-d-${label}`}>{kids}</Box>
+    ) : (
       <Box key={`token-gauge-d-${label}`} flexDirection="row" gap={1}>
-        <Box width={8}>{dim(label)}</Box>
+        <Box width={8}>
+          <Text dimColor>{label}</Text>
+        </Box>
         {kids}
       </Box>
     )
-    const lines: unknown[] = []
-    for (const d of v.detail) {
-      lines.push(line(d.label, [<Text>{d.text}</Text>]))
-      if (d.label === 'context' && v.slices.length) {
-        const stack = isTerminal ? (
-          <Box flexDirection="row">
-            {stackCells(v.slices, STACK_CELLS).map((r, i) => (
-              <Text key={String(i)} color={r.color} dimColor={!r.color}>
-                {(r.color ? '█' : '░').repeat(r.cells)}
+  const lines: unknown[] = []
+  for (const d of v.detail) {
+    lines.push(line(d.label, [isParagraph ? <Text><Text dimColor>{`${d.label} `}</Text>{d.text}</Text> : <Text>{d.text}</Text>]))
+    if (d.label === 'context' && v.slices.length) {
+      const stack = isTerminal ? (
+        <Box flexDirection="row">
+          {stackCells(v.slices, STACK_CELLS).map((r, i) => (
+            <Text key={String(i)} color={r.color} dimColor={!r.color}>
+              {(r.color ? '█' : '░').repeat(r.cells)}
+            </Text>
+          ))}
+        </Box>
+      ) : (
+        <Svg source={svgStack(v.slices, stackWidth)} alt="context breakdown" width={stackWidth} height={10} />
+      )
+      lines.push(line(' ', [stack]))
+      lines.push(
+        line('  ', [
+          <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+            {v.slices.map(x => (
+              <Text>
+                <Text color={x.color}>■ </Text>
+                <Text dimColor>{x.name} </Text>
+                {short(x.tokens)}
+                <Text dimColor>{` ${pct(x.share)}`}</Text>
               </Text>
             ))}
-          </Box>
-        ) : (
-          <Svg source={svgStack(v.slices, 420)} alt="context breakdown" width={420} height={10} />
-        )
-        lines.push(line(' ', [stack]))
-        lines.push(
-          line(' ', [
-            <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
-              {v.slices.map(x => (
-                <Text>
-                  <Text color={x.color}>■ </Text>
-                  <Text dimColor>{x.name} </Text>
-                  {short(x.tokens)}
-                  <Text dimColor>{` ${pct(x.share)}`}</Text>
-                </Text>
-              ))}
-            </Box>,
-          ]),
-        )
-      }
+          </Box>,
+        ]),
+      )
     }
-    rows.push(
-      <Box key="token-gauge-detail" flexDirection="column" paddingX={1} paddingTop={1}>
-        {lines}
-      </Box>,
-    )
   }
+  return lines
+}
+
+// The pane /token-gauge opens, which stays beside the transcript while the next-step box hides the band: the line's
+// parts one to a row, the detail panel as paragraphs and every button, for a dock a few dozen columns wide.
+function paneTree(ui: any, v: View, columns: number, act: Actions, working: (Work & { elapsed: number }) | undefined) {
+  const { Box, Text, Button } = ui
+  const a = actionLabels(v)
+  const buttons = [<Button key="token-gauge-pane-compact" label={a.compact} onPress={act.compact} />, <Button key="token-gauge-pane-handoff" label={a.handoff} onPress={act.handoff} />]
+  if (hasKeepwarm) buttons.push(<Button key="token-gauge-pane-keep" label="유지 90분" onPress={act.keepWarm} />)
   return (
-    <Box flexDirection="column" paddingX={1}>
-      {rows}
+    <Box flexDirection="column" gap={1}>
+      <Box key="token-gauge-pane-line" flexDirection="column">
+        {lineParts(v, working).map((p, i) => (
+          <Text key={`token-gauge-pane-part-${i}`} dimColor>
+            {p}
+          </Text>
+        ))}
+      </Box>
+      <Box key="token-gauge-pane-detail" flexDirection="column">
+        {detailLines(ui, v, false, Math.max(60, Math.min(420, columns * 7)), true)}
+      </Box>
+      <Box key="token-gauge-pane-buttons" flexDirection="row" flexWrap="wrap" gap={1}>
+        {buttons}
+      </Box>
     </Box>
   )
 }
