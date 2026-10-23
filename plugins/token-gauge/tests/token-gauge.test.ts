@@ -451,7 +451,7 @@ describe('token-gauge', () => {
       await clock.advance(1) // the send waits for a timer past the hook
       for (let i = 0; i < 50 && submitted.length + fills.length === 0; i++) await new Promise(res => setTimeout(res, 1))
       expect(asked.length).toBe(1)
-      expect(asked[0].questions[0]).toMatchObject({ header: 'token-gauge', question: 'test 플러그인이 이 프롬프트를 막았습니다.\n프롬프트 캐시가 38시간 39분 전에 식어서, 지금 보내면 252,672토큰을 다시 기록합니다: $2.02 (캐시가 살아 있었으면 $0.05)\n보내면 test의 /keepwarm이 3시간 동안 캐시를 유지합니다.\n그래도 보낼까요? 취소하면 입력창에 되돌립니다.' }) // whose card, and the reason in Korean
+      expect(asked[0].questions[0]).toMatchObject({ header: 'token-gauge', question: 'test 플러그인이 이 프롬프트를 막았습니다.\n프롬프트 캐시가 38시간 39분 전에 식어서, 지금 보내면 252,672토큰을 다시 기록합니다: $2.02 (캐시가 살아 있었으면 $0.05)\n보내면 test의 /keepwarm이 3시간 동안 캐시를 유지합니다.\n그래도 보낼까요? 취소하면 입력창에 되돌립니다. 입력창에서 다시 보내면 test가 비용을 내는 것으로 보고 통과시킵니다.' }) // whose card, and the reason in Korean
       expect(submitted.length).toBe(sent)
       expect(fills.length).toBe(filled)
       if (sent) expect(commands).toMatchObject([{ command: 'keepwarm', args: '3h00m' }])

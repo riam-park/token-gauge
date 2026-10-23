@@ -583,7 +583,8 @@ export function cardText(by: string, reason: string) {
     lines.push(`프롬프트 캐시가 ${koDuration(m[1]!)} 전에 식어서, 지금 보내면 ${m[2]}토큰을 다시 기록합니다: $${m[3]} (캐시가 살아 있었으면 $${m[4]})`)
     if (hold) lines.push(`보내면 ${by}의 /keepwarm이 ${koDuration(hold)} 동안 캐시를 유지합니다.`)
   } else lines.push(why.length > 600 ? `${why.slice(0, 599)}…` : why)
-  lines.push(`그래도 보낼까요? ${PUT_BACK}하면 입력창에 되돌립니다.`)
+  // cache-tax lets the same prompt through when it is sent again: cancelling then resending pays all the same
+  lines.push(`그래도 보낼까요? ${PUT_BACK}하면 입력창에 되돌립니다.${m ? ` 입력창에서 다시 보내면 ${by}가 비용을 내는 것으로 보고 통과시킵니다.` : ''}`)
   return { question: lines.join('\n'), cost: m?.[3] }
 }
 
