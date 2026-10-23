@@ -43,13 +43,11 @@ const SEND_ANYWAY = '보내기'
 const PUT_BACK = '취소'
 const QUESTION_LINE = 80 // the terminal's line above a question: two of its 40-column rows
 const NEXT_STEP_TOOL = 'mcp__ccd_turn__wrap_up' // the desktop app's turn-end summary; with a question it is the next-step box
-const PANE = 'token-gauge' // the detail pane's id
 
 // The userConfig options in plugin.json, asked at install and changed with /plugin configure or /config.
 // handoffDir '' asks for the handoff memo in the answer; a folder asks for a PROMPT file there.
-// desktopSpot: on the desktop, the band above the prompt or the line in the footer under it (`below`).
-export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string; desktopSpot: 'above' | 'below' }
-const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', desktopSpot: 'above' }
+export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string }
+const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '' }
 let cfg = DEFAULTS
 
 // Options as saved, checked: a missing or odd value keeps its default.
@@ -62,7 +60,6 @@ export function configure(o: Record<string, unknown>): Config {
     showCost: o.showCost !== false,
     alerts: o.alerts !== false,
     handoffDir: dir,
-    desktopSpot: o.desktopSpot === 'below' ? 'below' : 'above',
   }
   return cfg
 }
@@ -188,6 +185,7 @@ let orderChecked = false
 let seenDesktop = false // the band was drawn on the desktop: the footer line is the desktop's
 let turnCard = false // a next-step box is up, and the desktop hides the band under it
 let footerShown: string | undefined | null = null // the footer line last written; null until the first write
+let keepOfferedFor: number | undefined // the request whose cache the box was offered /keepwarm for
 
 function forget() {
   turnBase = undefined
@@ -223,6 +221,7 @@ export const register: Register = (on, options) => {
           if (work && tick % REFRESH_TICKS === 0) await readContext($, false).catch(() => {})
           if (work || shouldRedraw(snap, now)) $.ui.invalidate('ui.render')
           writeFooter($, now)
+          suggestKeep($, now)
           alert($, now)
         })
         .catch(() => {})
@@ -234,21 +233,7 @@ export const register: Register = (on, options) => {
     await readContext($, false).catch(() => {})
     await readToday($).catch(() => {})
     if (e.isInteractive && cfg.alerts) void checkUpdate($).catch(() => {}) // offline or blocked: no toast
-    await $.command.register({ name: 'token-gauge', description: 'token-gauge 상세 패널 열기(다음 단계 박스가 떠도 남음)' }).catch(() => {})
     return result
-  })
-
-  // /token-gauge opens the detail pane: the place for the details and the buttons when the band is not there.
-  on('command.run', { command: 'token-gauge' }, async $ => {
-    void readToday($).then(() => $.ui.invalidate('ui.render')).catch(() => {})
-    const opened = await $.ui.open({ id: PANE, title: 'token-gauge' }).catch(() => undefined)
-    return { text: opened?.isPlaced ? 'token-gauge 상세 패널을 열었습니다' : `token-gauge 상세 패널을 열지 못했습니다${opened?.reason ? `: ${opened.reason}` : ''}` }
-  })
-
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const now = await $.clock.now()
-    const working = work && { ...work, elapsed: now - work.since }
-    return paneTree($.ui.resolve(e), view(snap, now, hasKeepwarm), e.props.bodyColumns, actions($), working)
   })
 
   on('session.measure', async ($, e, next) => {
@@ -396,7 +381,6 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const rest = await next(e) // what other mods and Claude Code draw here stays
     if (e.surface === 'desktop') seenDesktop = true
-    if (e.surface === 'desktop' && cfg.desktopSpot === 'below') return rest // the footer line stands in for the band
     // A survey (a question in the band) keeps the chip row, without buttons or the detail panel, so the question keeps the room
     const band = await bandTree($, $.ui.resolve(e), e.surface === 'terminal', e.surface !== 'terminal', e.props.bodyColumns - 2, e.props.isWorking ? 'working' : 'idle', e.props.hasSurvey)
     if (!band) return rest
@@ -902,14 +886,33 @@ export function lineParts(v: View, working?: Work & { elapsed: number }) {
 
 export const footerLine = (v: View, working?: Work & { elapsed: number }) => lineParts(v, working).join(' · ') || undefined
 
-// The footer line, on the desktop: always under `below`, under `above` while a next-step box hides the band.
-// Written each second it changes, the cache countdown and the ⏳ time with it.
+// The footer line, on the desktop while a next-step box hides the band, the only time the band is gone that a plugin
+// can tell. Written each second it changes, the cache countdown and the ⏳ time with it.
 function writeFooter($: EngineInterface, now: number) {
   const working = work && { ...work, elapsed: now - work.since }
-  const text = seenDesktop && (cfg.desktopSpot === 'below' || turnCard) ? footerLine(view(snap, now, false), working) : undefined
+  const text = seenDesktop && turnCard ? footerLine(view(snap, now, false), working) : undefined
   if (text === footerShown) return
   footerShown = text
   $.ui.status(text)
+}
+
+// When cache-tax's hold goes in the empty prompt box as a suggestion, for Tab to take: once a cache window, in its last
+// 10 minutes, tried every 15 seconds until the box shows it (it shows only while the box is empty and idle).
+export function keepSuggestionDue(lastRequestAt: number | undefined, now: number, ttlMs: number, offeredFor: number | undefined) {
+  if (lastRequestAt === undefined || offeredFor === lastRequestAt) return false
+  const left = lastRequestAt + ttlMs - now
+  return left > 0 && left <= KEEP_BELOW_MS && Math.floor(now / 1000) % 15 === 0
+}
+
+function suggestKeep($: EngineInterface, now: number) {
+  const at = snap.lastRequestAt
+  if (!hasKeepwarm || work || !keepSuggestionDue(at, now, cfg.cacheTtlMs, keepOfferedFor)) return
+  void $.prompt
+    .suggest({ text: '/keepwarm 90m' })
+    .then(r => {
+      if (r.isShown) keepOfferedFor = at
+    })
+    .catch(() => {})
 }
 
 // Cells a text takes: a Hangul syllable or ⏳ two.
@@ -953,7 +956,7 @@ function draw(ui: any, v: View, isTerminal: boolean, flat: boolean, act: Actions
   if (showDetail && !isYielding) {
     rows.push(
       <Box key="token-gauge-detail" flexDirection="column" paddingX={1} paddingTop={1}>
-        {detailLines(ui, v, isTerminal, 420, false)}
+        {detailLines(ui, v, isTerminal)}
       </Box>,
     )
   }
@@ -1025,24 +1028,20 @@ function chipRow(ui: any, v: View, isTerminal: boolean, keep: unknown, working: 
   return chips
 }
 
-// The detail panel's lines with the context breakdown under its line: in a column of labels on the band, or as
-// paragraphs (`isParagraph`) in the narrow pane, where a wrapped line would leave its label behind.
-function detailLines(ui: any, v: View, isTerminal: boolean, stackWidth: number, isParagraph: boolean) {
+// The detail panel's lines in a column of labels, the context breakdown under its line.
+function detailLines(ui: any, v: View, isTerminal: boolean) {
   const { Box, Text, Svg } = ui
-  const line = (label: string, kids: unknown[]) =>
-    isParagraph ? (
-      <Box key={`token-gauge-d-${label}`}>{kids}</Box>
-    ) : (
-      <Box key={`token-gauge-d-${label}`} flexDirection="row" gap={1}>
-        <Box width={8}>
-          <Text dimColor>{label}</Text>
-        </Box>
-        {kids}
+  const line = (label: string, kids: unknown[]) => (
+    <Box key={`token-gauge-d-${label}`} flexDirection="row" gap={1}>
+      <Box width={8}>
+        <Text dimColor>{label}</Text>
       </Box>
-    )
+      {kids}
+    </Box>
+  )
   const lines: unknown[] = []
   for (const d of v.detail) {
-    lines.push(line(d.label, [isParagraph ? <Text><Text dimColor>{`${d.label} `}</Text>{d.text}</Text> : <Text>{d.text}</Text>]))
+    lines.push(line(d.label, [<Text>{d.text}</Text>]))
     if (d.label === 'context' && v.slices.length) {
       const stack = isTerminal ? (
         <Box flexDirection="row">
@@ -1053,7 +1052,7 @@ function detailLines(ui: any, v: View, isTerminal: boolean, stackWidth: number, 
           ))}
         </Box>
       ) : (
-        <Svg source={svgStack(v.slices, stackWidth)} alt="context breakdown" width={stackWidth} height={10} />
+        <Svg source={svgStack(v.slices, 420)} alt="context breakdown" width={420} height={10} />
       )
       lines.push(line(' ', [stack]))
       lines.push(
@@ -1073,32 +1072,6 @@ function detailLines(ui: any, v: View, isTerminal: boolean, stackWidth: number, 
     }
   }
   return lines
-}
-
-// The pane /token-gauge opens, which stays beside the transcript while the next-step box hides the band: the line's
-// parts one to a row, the detail panel as paragraphs and every button, for a dock a few dozen columns wide.
-function paneTree(ui: any, v: View, columns: number, act: Actions, working: (Work & { elapsed: number }) | undefined) {
-  const { Box, Text, Button } = ui
-  const a = actionLabels(v)
-  const buttons = [<Button key="token-gauge-pane-compact" label={a.compact} onPress={act.compact} />, <Button key="token-gauge-pane-handoff" label={a.handoff} onPress={act.handoff} />]
-  if (hasKeepwarm) buttons.push(<Button key="token-gauge-pane-keep" label="유지 90분" onPress={act.keepWarm} />)
-  return (
-    <Box flexDirection="column" gap={1}>
-      <Box key="token-gauge-pane-line" flexDirection="column">
-        {lineParts(v, working).map((p, i) => (
-          <Text key={`token-gauge-pane-part-${i}`} dimColor>
-            {p}
-          </Text>
-        ))}
-      </Box>
-      <Box key="token-gauge-pane-detail" flexDirection="column">
-        {detailLines(ui, v, false, Math.max(60, Math.min(420, columns * 7)), true)}
-      </Box>
-      <Box key="token-gauge-pane-buttons" flexDirection="row" flexWrap="wrap" gap={1}>
-        {buttons}
-      </Box>
-    </Box>
-  )
 }
 
 // The chips as one line of colored text: for the terminal's few rows above a question dialog, and for a band too

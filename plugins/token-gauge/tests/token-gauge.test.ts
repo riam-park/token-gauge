@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { advice, calibrate, cardText, compactArgs, configure, keepPings, droppedBy, estimate, fit, fnv, footerLine, forecastText, handoffText, hitRate, isNewer, itemLabel, keepwarmHold, koDuration, largest, latestVersion, lostFiles, memoUsd, modelName, pace, pdfPages, readKind, redact, rewriteUsd, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
+import { advice, calibrate, cardText, compactArgs, configure, keepPings, droppedBy, estimate, fit, fnv, footerLine, forecastText, handoffText, keepSuggestionDue, hitRate, isNewer, itemLabel, keepwarmHold, koDuration, largest, latestVersion, lostFiles, memoUsd, modelName, pace, pdfPages, readKind, redact, rewriteUsd, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
 import type { Snapshot } from '../hooks/register'
 
 const NOW = Date.parse('2026-10-22T00:00:00Z')
@@ -127,8 +127,7 @@ describe('token-gauge', () => {
   }
 
   test('install options', () => {
-    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', desktopSpot: 'above' })
-    expect(configure({ desktopSpot: 'under' }).desktopSpot).toBe('above')
+    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '' })
     expect(configure({ actionsAt: 200, handoffDir: '  ' })).toMatchObject({ actionsAt: 70, handoffDir: '' }) // odd values keep defaults
     expect(handoffText('')).toContain('파일은 만들지 말고 이 답변에') // no folder: the memo comes as the answer
     configure({ cacheTtl: '5m', actionsAt: 80, showCost: false, handoffDir: 'notes/' })
@@ -632,26 +631,8 @@ describe('token-gauge', () => {
   }
   const BAND = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 }
 
-  for (const [spot, surface, hasBand, hasLine] of [
-    ['below', 'desktop', false, true],
-    ['above', 'desktop', true, false],
-    ['below', 'terminal', true, false],
-  ] as const) {
-    test(`desktopSpot ${spot} on the ${surface}: band ${hasBand ? 'drawn' : 'left out'}, footer line ${hasLine ? 'written' : 'none'}`, { options: { desktopSpot: spot } }, async ($: any, on: any) => {
-      const clock = mock.clock(on, { now: NOW })
-      const lines = footerEngine(on)
-      await $.session.start({ surface, isInteractive: false, cwd: '/w' })
-      const ui = await $.ui.mount({ plugin: 'token-gauge', surface, component: 'AbovePrompt', props: BAND })
-      expect(Boolean(await ui.find({ type: 'Button', text: '▾ 상세' }))).toBe(hasBand)
-      expect(await ui.find({ type: 'Text', text: 'engine AbovePrompt' })).toBeDefined() // what others draw stays
-      await clock.advance(1000)
-      await settle()
-      expect(lines.filter(Boolean)).toEqual(hasLine ? [LINE] : [])
-      await ui.unmount()
-    })
-  }
-
-  test('desktopSpot above: the footer line only while a next-step box hides the band', async ($: any, on: any) => {
+  // 2026-10-24: the band always above the prompt; the footer line stands in only while the next-step box hides it
+  test('the footer line only while a next-step box hides the band', async ($: any, on: any) => {
     const clock = mock.clock(on, { now: NOW })
     const lines = footerEngine(on)
     on('tool.call', () => ({ result: 'ok' }))
@@ -659,6 +640,8 @@ describe('token-gauge', () => {
     on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
     await $.session.start({ surface: 'desktop', isInteractive: false, cwd: '/w' })
     const ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+    expect(await ui.find({ type: 'Button', text: '▾ 상세' })).toBeDefined() // the band is drawn
+    expect(await ui.find({ type: 'Text', text: 'engine AbovePrompt' })).toBeDefined() // what others draw stays
     await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'done' }) // a recap alone draws no box
     await clock.advance(1000)
     await settle()
@@ -674,26 +657,14 @@ describe('token-gauge', () => {
     await ui.unmount()
   })
 
-  test('/token-gauge opens the detail pane: the parts one to a row, the details as paragraphs, every button', async ($: any, on: any) => {
-    engine(on)
-    const opened: string[] = []
-    on('command.register', () => ({ value: undefined }))
-    on('ui.open', (_$: any, e: any) => {
-      opened.push(e.id)
-      return { value: { isPlaced: true } }
-    })
-    await $.session.start({ surface: 'desktop', isInteractive: false, cwd: '/w' })
-    const r = await $.command.run({ command: 'token-gauge', args: '' })
-    expect(opened).toEqual(['token-gauge'])
-    expect(r.text).toBe('token-gauge 상세 패널을 열었습니다')
-    const props = { title: 'token-gauge', isFocused: false, bodyColumns: 36, placement: 'dock', scroll: { bodyRows: 40 }, view: {} }
-    const pane = await $.ui.mount({ plugin: 'token-gauge', surface: 'desktop', component: 'Pane', requestId: 'token-gauge', props })
-    expect(await pane.find({ type: 'Text', text: '🟢 5h 5% ↻2h52' })).toBeDefined() // a part to a row
-    expect(await pane.find({ type: 'Text', text: '🟢 ctx 113k/1M 11%' })).toBeDefined()
-    expect(await pane.find({ type: 'Text', text: /^5h 리셋 / })).toBeDefined() // the label leads its paragraph
-    expect(await pane.find({ type: 'Button', text: '/compact' })).toBeDefined() // the buttons whatever the context
-    expect(await pane.find({ type: 'Button', text: /^인계 메모/ })).toBeDefined()
-    expect(await pane.find({ type: 'Button', text: '유지 90분' })).toBeUndefined() // no cache-tax, no hold
-    await pane.unmount()
+  // 2026-10-24: the status line under the prompt cannot be pressed; the empty box can take a suggestion instead
+  test('/keepwarm 90m is suggested once a cache window, in its last 10 minutes, every 15 seconds until shown', () => {
+    const at = NOW - 52 * MIN // 8 minutes left of the hour
+    expect(keepSuggestionDue(at, NOW, 60 * MIN, undefined)).toBe(true) // NOW falls on a 15-second mark
+    expect(keepSuggestionDue(at, NOW + 1000, 60 * MIN, undefined)).toBe(false) // between marks
+    expect(keepSuggestionDue(at, NOW, 60 * MIN, at)).toBe(false) // shown for this cache already
+    expect(keepSuggestionDue(NOW - 40 * MIN, NOW, 60 * MIN, undefined)).toBe(false) // 20 minutes left
+    expect(keepSuggestionDue(NOW - 61 * MIN, NOW, 60 * MIN, undefined)).toBe(false) // already cold
+    expect(keepSuggestionDue(undefined, NOW, 60 * MIN, undefined)).toBe(false) // no request yet
   })
 })
