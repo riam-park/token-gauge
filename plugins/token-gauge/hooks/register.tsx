@@ -323,7 +323,7 @@ export const register: Register = (on, options) => {
   // count against the hook's time; the drop then shown is the answer's short line.
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
-    if (result.drop === undefined || e.command || e.isMeta || !PERSON.has(e.origin.kind)) return result
+    if (result.drop === undefined || e.command || e.isMeta || !(await typedByPerson($, e.origin.kind))) return result
     const by = droppedBy(next.trace)
     return by ? { drop: await askDropped($, e.text, by, result.drop) } : result
   }).catch(async ($, e, next) => next(e)) // observer only: never stands in the way of a prompt
@@ -542,6 +542,12 @@ function observe($: EngineInterface, e: Record<string, unknown>, label: string, 
 
 function scaled(tokens: number) {
   return Math.round(tokens * (snap.k ?? 1))
+}
+
+// The desktop app hosts its sessions through the SDK, so there the person's typing arrives as `sdk`; in a plain -p
+// run, with no surface to draw on, an `sdk` prompt is nobody's to ask about.
+async function typedByPerson($: EngineInterface, kind: string) {
+  return PERSON.has(kind) || (kind === 'sdk' && (await $.session.surfaces().catch(() => [])).length > 0)
 }
 
 // The person's choice, and the line their drop shows for it. Sending goes out as the plugin's own prompt, which

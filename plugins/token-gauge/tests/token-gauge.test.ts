@@ -375,8 +375,12 @@ describe('token-gauge', () => {
     expect(keepwarmHold('dropped for another reason')).toBeUndefined()
   })
 
-  for (const [choice, sent, filled, shown] of [['보내기', 1, 0, 'test: 확인을 받아 다시 보냅니다'], ['취소', 0, 1, 'test: 보내지 않고 입력창에 되돌렸습니다']] as const) {
-    test(`a prompt another hook dropped is asked about before the drop shows (${choice})`, async ($: any, on: any) => {
+  // the desktop app hosts its sessions through the SDK: the person's typing arrives there as `sdk`
+  for (const [choice, sent, filled, shown, surface, kind] of [
+    ['보내기', 1, 0, 'test: 확인을 받아 다시 보냅니다', 'terminal', 'composer'],
+    ['취소', 0, 1, 'test: 보내지 않고 입력창에 되돌렸습니다', 'desktop', 'sdk'],
+  ] as const) {
+    test(`a prompt another hook dropped is asked about before the drop shows (${choice}, ${surface})`, async ($: any, on: any) => {
       const clock = mock.clock(on, { now: NOW })
       const asked: any[] = []
       const submitted: any[] = []
@@ -404,8 +408,9 @@ describe('token-gauge', () => {
         commands.push(e)
         return { text: 'ok' }
       })
-      await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/w' })
-      const r = await $.prompt.submit({ text: '이어서 해 줘', origin: { kind: 'composer' } })
+      on('session.surfaces', () => ({ value: [surface] }))
+      await $.session.start({ surface, isInteractive: true, cwd: '/w' })
+      const r = await $.prompt.submit({ text: '이어서 해 줘', origin: { kind } })
       expect(r.drop).toBe(shown) // the card's answer, not the hook's warning
       await clock.advance(1) // the send waits for a timer past the hook
       for (let i = 0; i < 50 && submitted.length + fills.length === 0; i++) await new Promise(res => setTimeout(res, 1))
@@ -417,4 +422,18 @@ describe('token-gauge', () => {
       if (filled) expect(fills[0]).toMatchObject({ text: '이어서 해 줘', mode: 'replace' })
     })
   }
+
+  test('a plain -p run: a dropped sdk prompt keeps its drop and asks nothing', async ($: any, on: any) => {
+    const asked: any[] = []
+    on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+    on('prompt.submit', () => ({ drop: 'test: cold' }))
+    on('tool.call', (_$: any, e: any) => {
+      asked.push(e)
+      return { result: {} }
+    })
+    on('session.surfaces', () => ({ value: [] }))
+    await $.session.start({ isInteractive: false, cwd: '/w' })
+    expect((await $.prompt.submit({ text: 'go', origin: { kind: 'sdk' } })).drop).toBe('test: cold')
+    expect(asked.length).toBe(0)
+  })
 })
