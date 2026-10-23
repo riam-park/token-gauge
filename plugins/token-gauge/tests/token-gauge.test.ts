@@ -602,14 +602,14 @@ describe('token-gauge', () => {
 
   // 2026-10-24: the desktop hides the band under its next-step box; the footer under the prompt stays
   test('the footer line: the band as text, the chips split by a bar, the model left out', () => {
-    expect(footerLine(view(calm, NOW, false))).toBe('plan 5h 5% ▱▱▱▱▱▱ ↻2h52 · 7d 38% ↻3d0h · $1.27  │  ☀ context ▰▱▱▱▱▱▱▱ 113k / 1M 11% · ▲1.3k · ≈ 675턴  │  ❄ 59:06')
+    expect(footerLine(view(calm, NOW, false))).toBe('plan 5h 5% ▱▱▱▱▱▱ ↻2h52 · 7d 38% ↻3d0h · $1.27  │  ☀\uFE0F context ▰▱▱▱▱▱▱▱ 113k / 1M 11% · ▲1.3k · ≈ 675턴  │  ❄\uFE0F 59:06')
     const limits = [
       { kind: 'five_hour', percentUsed: 80, resetsAt: at(172 * MIN) },
       { kind: 'seven_day', percentUsed: 95, resetsAt: at(3 * 24 * 60 * MIN) },
     ]
     const busy: Snapshot = { ...calm, limits, tokens: 800_000, lastRequestAt: NOW - 55 * MIN }
-    expect(footerLine(view(busy, NOW, false))).toMatch(/^plan 5h 80% ▰▰▰▰▰▱ ↻2h52 · 7d 95% ↻3d0h · \$1\.27 {2}│ {2}☇ context [▰▱]{8} 800k \/ 1M 80% · ▲1\.3k · ≈ \d+턴 {2}│ {2}❄ 5:00$/)
-    expect(footerLine(view({ ...busy, lastRequestAt: NOW - 2 * 60 * MIN }, NOW, false))).toMatch(/ {2}│ {2}❄ cold 재기록 ~800k$/)
+    expect(footerLine(view(busy, NOW, false))).toMatch(/^plan 5h 80% ⚠\uFE0F ▰▰▰▰▰▱ ↻2h52 · 7d 95% ⚠\uFE0F ↻3d0h · \$1\.27 {2}│ {2}⛈\uFE0F context [▰▱]{8} 800k \/ 1M 80% · ▲1\.3k · ≈ \d+턴 {2}│ {2}❄\uFE0F 5:00 ⚠\uFE0F$/) // yellow and red called out
+    expect(footerLine(view({ ...busy, lastRequestAt: NOW - 2 * 60 * MIN }, NOW, false))).toMatch(/ {2}│ {2}❄\uFE0F cold ⚠\uFE0F 재기록 ~800k$/)
     expect(footerLine(view(calm, NOW, false), { since: 0, elapsed: 7_000, tools: 1, agents: 1 })).toMatch(/ {2}│ {2}⏳ 0:07 · 도구 1 · subagent 1 실행 중$/) // while Claude works
     expect(footerLine(view({ ...calm, limits: [], costUsd: undefined, tokens: undefined, lastRequestAt: undefined }, NOW, false))).toBeUndefined()
   })
@@ -617,7 +617,7 @@ describe('token-gauge', () => {
   const settle = async () => {
     for (let i = 0; i < 10; i++) await new Promise(res => setTimeout(res, 1))
   }
-  const LINE = /^plan 5h 5% ▱{6} ↻2h52 · 7d 38% ↻3d0h {2}│ {2}☀ context [▰▱]{8} 113k \/ 1M 11%$/
+  const LINE = /^plan 5h 5% ▱{6} ↻2h52 · 7d 38% ↻3d0h {2}│ {2}☀\uFE0F context [▰▱]{8} 113k \/ 1M 11%$/
   function footerEngine(on: any) {
     const lines: (string | undefined)[] = []
     on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))

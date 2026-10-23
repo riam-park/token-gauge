@@ -866,21 +866,27 @@ export function text(v: View): string {
   return chips.join('  ')
 }
 
-// The band as text, for the footer under the prompt, which draws text alone: the chips split by a bar, their bars
-// as ▰▱, the model left out (the footer shows it beside).
-//   plan 5h 23% ▰▱▱▱▱▱ ↻1h42 · 7d 83% ↻19h52 · $0.81  │  ☀ context ▰▱▱▱▱▱▱▱ 111k / 1M 11%  │  ❄ 51:20  │  ⏳ 0:06 · 도구 0
+// The forecast and cache icons as color emoji (U+FE0F asks for the emoji form): the footer keeps an emoji's colors.
+const EMOJI: Record<string, string> = { '☀': '☀️', '☁': '☁️', '☂': '☂️', '☇': '⛈️', '↯': '⚡' }
+// A chip the band draws yellow or red, called out where the footer has no colors.
+const warn = (color: string) => (color === C.yellow || color === C.red ? ' ⚠️' : '')
+
+// The band as text, for the footer under the prompt, which draws text alone (ANSI codes show as text there): the
+// chips split by a bar, their bars as ▰▱, the icons in color, ⚠️ where the band goes yellow or red, the model left
+// out (the footer shows it beside).
+//   plan 5h 23% ▰▱▱▱▱▱ ↻1h42 · 7d 83% ⚠️ ↻19h52 · $0.81  │  ☀️ context ▰▱▱▱▱▱▱▱ 111k / 1M 11%  │  ❄️ 51:20  │  ⏳ 0:06 · 도구 0
 export function footerLine(v: View, working?: Work & { elapsed: number }) {
   const chips: string[] = []
   const p = v.plan
   if (p) {
     const parts: string[] = []
-    if (p.five) parts.push(`5h ${p.five.percent}% ${textBar(p.five.bar.percent, 6)}${p.five.reset ? ` ↻${p.five.reset}` : ''}`)
-    if (p.seven) parts.push(`7d ${p.seven.percent}%${p.seven.reset ? ` ↻${p.seven.reset}` : ''}`)
+    if (p.five) parts.push(`5h ${p.five.percent}%${warn(p.five.color)} ${textBar(p.five.bar.percent, 6)}${p.five.reset ? ` ↻${p.five.reset}` : ''}`)
+    if (p.seven) parts.push(`7d ${p.seven.percent}%${warn(p.seven.color)}${p.seven.reset ? ` ↻${p.seven.reset}` : ''}`)
     if (p.cost) parts.push(p.cost)
     chips.push(`plan ${parts.join(' · ')}`)
   }
-  if (v.ctx) chips.push([`${v.ctx.icon} context ${textBar(v.ctx.bar.percent, 8)} ${v.ctx.used} / ${v.ctx.window} ${v.ctx.percent}%`, v.ctx.delta, v.ctx.turns].filter(Boolean).join(' · '))
-  if (v.cache) chips.push([`❄ ${v.cache.text}`, v.cache.rewrite].filter(Boolean).join(' '))
+  if (v.ctx) chips.push([`${EMOJI[v.ctx.icon] ?? v.ctx.icon} context ${textBar(v.ctx.bar.percent, 8)} ${v.ctx.used} / ${v.ctx.window} ${v.ctx.percent}%`, v.ctx.delta, v.ctx.turns].filter(Boolean).join(' · '))
+  if (v.cache) chips.push([`❄️ ${v.cache.text}${warn(v.cache.color)}`, v.cache.rewrite].filter(Boolean).join(' '))
   if (working) chips.push(`⏳ ${mmss(working.elapsed)} · 도구 ${working.tools}${working.agents ? ` · subagent ${working.agents} 실행 중` : ''}`)
   return chips.join('  │  ') || undefined
 }
