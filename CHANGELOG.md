@@ -8,9 +8,11 @@
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-24
+
 ### 추가
 
-- 데스크톱 앱에서 다음 단계 박스가 칩 줄을 가리는 동안, 같은 내용을 입력창 밑 오른쪽에 글 한 줄로 보입니다(`plan 5h 23% ▰▱▱▱▱▱ ↻1h42 · 7d 83% ⚠️ … │ ☀️ context … │ ❄️ 51:20`). 그 자리는 색 글자를 받지 않아서, 막대는 ▰▱ 글자로, 아이콘은 색 이모지로 보이고, 칩 줄에서 노랑이나 빨강인 항목에는 ⚠️를 붙입니다. 모델은 앱이 그 옆에 보이므로 뺍니다. 그 자리는 글자만 그려지고 누를 수 없습니다. 박스가 사라지면 지웁니다.
+- 데스크톱 앱에서 다음 단계 박스가 칩 줄을 가리는 동안, 같은 내용을 입력창 밑 오른쪽에 글 한 줄로 보입니다(`plan 5h 23% ▰▱▱▱▱▱ ↻1h42 · 7d 83% ⚠️ … │ ☀️ context … │ ❄️ 51:20`). 그 자리는 색 글자를 받지 않아서, 막대는 ▰▱ 글자로, 아이콘은 색 이모지로 보이고, 칩 줄에서 노랑이나 빨강인 항목에는 ⚠️를 붙입니다. 모델은 앱이 그 옆에 보이므로 뺍니다. 누를 수는 없고, 박스가 사라지면 지웁니다.
 - 캐시가 10분 이하로 남고 입력창이 비어 있으면, 입력창에 흐린 제안 `/keepwarm 90m`을 띄웁니다. Tab으로 받고 Enter로 실행합니다. cache-tax가 있을 때, 캐시 한 번에 한 번만 띄웁니다.
 
 ### 변경
@@ -146,7 +148,8 @@
 - 캐시 10분 이하에서 `유지 90분` 버튼(cache-tax 연동), 작업 중 칩, 알림, `d` 단축키
 - 초보자용 README와 토큰·캐시 절약 가이드
 
-[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.6.0...HEAD
+[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.7.0...HEAD
+[1.7.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.7.0
 [1.6.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.6.0
 [1.5.1]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.5.1
 [1.5.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.5.0
