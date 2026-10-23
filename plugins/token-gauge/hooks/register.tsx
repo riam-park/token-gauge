@@ -376,8 +376,10 @@ export const register: Register = (on, options) => {
 async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, columns: number, state: 'idle' | 'working' | 'question', isYielding: boolean) {
   const now = await $.clock.now()
   const working = state === 'working' && work ? { ...work, elapsed: now - work.since } : undefined
-  const v = fit(view(snap, now, hasKeepwarm), columns - (working ? workCells(working) : 0))
+  const room = columns - (working ? workCells(working) : 0)
+  const v = fit(view(snap, now, hasKeepwarm), room)
   if (!v.plan && !v.ctx && !v.cache) return undefined
+  if (width(v) > room) return questionLine(ui, v, working) // too narrow for the chips even folded: one line of text, as above a question
   const act = {
     keepWarm: () => {
       $.command
@@ -945,8 +947,9 @@ function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working: (Wor
   )
 }
 
-// The chips as one line of colored text, for the terminal's few rows above a question dialog.
-function questionLine(ui: any, v: View) {
+// The chips as one line of colored text: for the terminal's few rows above a question dialog, and for a band too
+// narrow for the chips; there a turn in progress shows its time.
+function questionLine(ui: any, v: View, working?: Work & { elapsed: number }) {
   const { Text } = ui
   const parts: unknown[] = []
   const dim = (s: string) => parts.push(<Text dimColor>{s}</Text>)
@@ -976,6 +979,11 @@ function questionLine(ui: any, v: View) {
     gap()
     num(v.model.name, v.model.color)
     if (v.model.effort) dim(` · ${v.model.effort}`)
+  }
+  if (working) {
+    gap()
+    num('⏳ ', C.yellow)
+    num(mmss(working.elapsed))
   }
   return parts.length ? <Text>{parts}</Text> : undefined
 }

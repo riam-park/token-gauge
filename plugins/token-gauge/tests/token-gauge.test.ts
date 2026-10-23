@@ -354,6 +354,25 @@ describe('token-gauge', () => {
     await ui.unmount()
   })
 
+  // under about 90 columns not even the folded chips fit: the band turns into one line of text, as above a question
+  test('a band too narrow for the chips is one line of text', async ($: any, on: any) => {
+    engine(on)
+    on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
+    await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
+    const band = (isWorking: boolean, bodyColumns: number) => $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking, maxRows: 10, bodyColumns } })
+    let ui = await band(false, 70)
+    expect(await ui.find({ type: 'Text', text: /113k\/1M/ })).toBeDefined()
+    expect(await ui.find({ type: 'Button' })).toBeUndefined() // no chips, no buttons
+    await ui.unmount()
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    ui = await band(true, 70)
+    expect(await ui.find({ type: 'Text', text: '⏳ ' })).toBeDefined()
+    await ui.unmount()
+    ui = await band(false, 160)
+    expect(await ui.find({ type: 'Button', label: '▾ 상세' })).toBeDefined() // wide enough: the chips as before
+    await ui.unmount()
+  })
+
   test('during a turn the context chip is read again every few seconds; ▲ is the growth since the turn began', async ($: any, on: any) => {
     const clock = mock.clock(on, { now: NOW })
     mock.store(on)
