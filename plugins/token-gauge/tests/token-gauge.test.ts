@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { advice, calibrate, cardText, configure, droppedBy, estimate, fit, fnv, forecastText, handoffText, hitRate, isNewer, itemLabel, keepwarmHold, koDuration, largest, latestVersion, lostFiles, modelName, pace, pdfPages, readKind, redact, rewriteUsd, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
+import { advice, calibrate, cardText, configure, keepPings, droppedBy, estimate, fit, fnv, forecastText, handoffText, hitRate, isNewer, itemLabel, keepwarmHold, koDuration, largest, latestVersion, lostFiles, modelName, pace, pdfPages, readKind, redact, rewriteUsd, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
 import type { Snapshot } from '../hooks/register'
 
 const NOW = Date.parse('2026-10-22T00:00:00Z')
@@ -385,7 +385,10 @@ describe('token-gauge', () => {
     expect(koDuration('5m')).toBe('5분')
     expect(koDuration('2d4h')).toBe('2일 4시간')
     expect(koDuration('soon')).toBe('soon')
-    expect(cardText('guard', 'guard: not on Fridays')).toEqual({ question: 'guard 플러그인이 이 프롬프트를 막았습니다.\nnot on Fridays\n그래도 보낼까요? 취소하면 입력창에 되돌립니다.', cost: undefined })
+    expect(keepPings('3h00m', 60 * MIN)).toBe(3)
+    expect(keepPings('45m', 60 * MIN)).toBeUndefined() // over before the first refresh
+    expect(keepPings('3h00m', 5 * MIN)).toBeUndefined() // a 5-minute cache's cadence is not known
+    expect(cardText('guard', 'guard: not on Fridays', 60 * MIN)).toEqual({ question: 'guard 플러그인이 이 프롬프트를 막았습니다.\nnot on Fridays\n그래도 보낼까요? 취소하면 입력창에 되돌립니다.', cost: undefined })
     expect(Math.round(rewriteUsd('claude-opus-5-5', 252_672, 60 * MIN)! * 100)).toBe(202) // as cache-tax prices it: $8/MTok for the 1-hour cache
     expect(rewriteUsd('claude-sonnet-5-5[1m]', 1_000_000, 5 * MIN)).toBe(2.5)
     expect(rewriteUsd('claude-3-opus', 1_000, 60 * MIN)).toBeUndefined()
@@ -409,9 +412,12 @@ describe('token-gauge', () => {
   })
 
   // the desktop app hosts its sessions through the SDK: the person's typing arrives there as `sdk`
-  for (const [choice, sent, filled, shown, surface, kind] of [
-    ['보내기 ($2.02)', 1, 0, 'token-gauge: 보내기를 골라, test 플러그인이 막았던 프롬프트를 다시 보냅니다.', 'terminal', 'composer'],
-    ['취소', 0, 1, 'token-gauge: 보내지 않았습니다. 입력창에 되돌렸습니다.', 'desktop', 'sdk'],
+  // with the hold the person chose, /keepwarm holds it; sending alone turns off the hold cache-tax starts on its own
+  const SENT = 'token-gauge: 보내기를 골라, test 플러그인이 막았던 프롬프트를 다시 보냅니다.'
+  for (const [choice, sent, filled, shown, surface, kind, keepwarm, toast] of [
+    ['보내고 3시간 유지 ($2.02 + 약 $0.30)', 1, 0, SENT, 'terminal', 'composer', '3h00m', '다시 보냈습니다 · /keepwarm으로 3시간 동안 캐시를 유지합니다'],
+    ['보내기만 ($2.02)', 1, 0, SENT, 'terminal', 'composer', 'off', '다시 보냈습니다 · 캐시 유지는 켜지 않았습니다'],
+    ['취소', 0, 1, 'token-gauge: 보내지 않았습니다. 입력창에 되돌렸습니다.', 'desktop', 'sdk', '', ''],
   ] as const) {
     test(`a prompt another hook dropped is asked about before the drop shows (${choice}, ${surface})`, async ($: any, on: any) => {
       const clock = mock.clock(on, { now: NOW })
@@ -453,11 +459,11 @@ describe('token-gauge', () => {
       await clock.advance(1) // the send waits for a timer past the hook
       for (let i = 0; i < 50 && submitted.length + fills.length === 0; i++) await new Promise(res => setTimeout(res, 1))
       expect(asked.length).toBe(1)
-      expect(asked[0].questions[0]).toMatchObject({ header: 'token-gauge', question: 'test 플러그인이 이 프롬프트를 막았습니다.\n프롬프트 캐시가 38시간 39분 전에 식어서, 지금 보내면 252,672토큰을 다시 기록합니다: $2.02 (캐시가 살아 있었으면 $0.05)\n보내면 test의 /keepwarm이 3시간 동안 캐시를 유지합니다.\n그래도 보낼까요? 취소하면 입력창에 되돌립니다. 입력창에서 다시 보내면 test가 비용을 내는 것으로 보고 통과시킵니다.' }) // whose card, and the reason in Korean
+      expect(asked[0].questions[0]).toMatchObject({ header: 'token-gauge', question: 'test 플러그인이 이 프롬프트를 막았습니다.\n프롬프트 캐시가 38시간 39분 전에 식어서, 지금 보내면 252,672토큰을 다시 기록합니다: $2.02 (캐시가 살아 있었으면 $0.05)\n3시간 유지를 고르면 test가 50분마다 캐시를 갱신합니다(3번, 약 $0.30). 보내기만 고르면 유지를 켜지 않습니다.\n그래도 보낼까요? 취소하면 입력창에 되돌립니다. 입력창에서 다시 보내면 test가 비용을 내는 것으로 보고 통과시킵니다.' }) // whose card, and the reason in Korean
       expect(submitted.length).toBe(sent)
       expect(fills.length).toBe(filled)
-      if (sent) expect(commands).toMatchObject([{ command: 'keepwarm', args: '3h00m' }])
-      if (sent) expect(toasts).toContain('다시 보냈습니다 · /keepwarm으로 3시간 동안 캐시를 유지합니다')
+      if (sent) expect(commands).toMatchObject([{ command: 'keepwarm', args: keepwarm }])
+      if (sent) expect(toasts).toContain(toast)
       if (filled) expect(fills[0]).toMatchObject({ text: '이어서 해 줘', mode: 'replace' })
     })
   }

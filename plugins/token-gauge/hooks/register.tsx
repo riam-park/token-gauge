@@ -560,12 +560,16 @@ async function typedByPerson($: EngineInterface, kind: string) {
 // prompt, which cache-tax lets through, once this drop has settled (a timer, past this hook). Anything else (cancel,
 // text typed under Other) goes back in the box; a card never answered (dismissed, or no surface to ask on) keeps the
 // hook's own reason.
+// With a cache hold on offer, the person picks whether to keep the cache warm as well as whether to send.
 async function askDropped($: EngineInterface, text: string, by: string, reason: string) {
-  const card = cardText(by, reason)
-  const send = card.cost ? `${SEND_ANYWAY} ($${card.cost})` : SEND_ANYWAY
-  const answer = await $.ui.ask(card.question, { options: [send, PUT_BACK], header: 'token-gauge' }).catch(() => undefined)
-  if (answer === send) {
-    $.clock.after(0, () => void sendAnyway($, text, reason).catch(() => {})) // a submit from inside prompt.submit would wait on this one
+  const card = cardText(by, reason, cfg.cacheTtlMs)
+  const cost = card.cost ? `$${card.cost}` : ''
+  const keep = card.hold ? `보내고 ${koDuration(card.hold)} 유지 (${[cost, card.keepUsd && `약 $${card.keepUsd}`].filter(Boolean).join(' + ') || '비용 미상'})` : undefined
+  const send = card.hold ? `보내기만${cost && ` (${cost})`}` : `${SEND_ANYWAY}${cost && ` (${cost})`}`
+  const answer = await $.ui.ask(card.question, { options: keep ? [keep, send, PUT_BACK] : [send, PUT_BACK], header: 'token-gauge' }).catch(() => undefined)
+  if (answer === keep || answer === send) {
+    const hold = answer === keep ? card.hold : undefined
+    $.clock.after(0, () => void sendAnyway($, text, hold).catch(() => {})) // a submit from inside prompt.submit would wait on this one
     return `token-gauge: 보내기를 골라, ${by} 플러그인이 막았던 프롬프트를 다시 보냅니다.`
   }
   await $.prompt.fill({ text: answer && answer !== PUT_BACK ? answer : text, mode: 'replace' }).catch(() => {})
@@ -573,19 +577,31 @@ async function askDropped($: EngineInterface, text: string, by: string, reason: 
 }
 
 // The card's question: who dropped the prompt, why (cache-tax's English reason read into Korean; any other reason as
-// it came), and what cancelling does. `cost` is what sending costs, when the reason says.
-export function cardText(by: string, reason: string) {
+// it came), and what cancelling does. `cost` is what sending costs, when the reason says; `hold` the cache hold the
+// reason offers, `keepUsd` what holding it costs.
+export function cardText(by: string, reason: string, ttlMs: number) {
   const why = reason.startsWith(`${by}:`) ? reason.slice(by.length + 1).trimStart() : reason
-  const m = /went cold (\S+) ago\. Sending this re-writes up to ([\d,]+) tokens at \$[\d.]+\/MTok = \$([\d.]+) \(a warm turn would have cost \$([\d.]+)\)/.exec(why)
+  const m = /went cold (\S+) ago\. Sending this re-writes up to ([\d,]+) tokens at \$([\d.]+)\/MTok = \$([\d.]+) \(a warm turn would have cost \$([\d.]+)\)/.exec(why)
   const hold = keepwarmHold(why)
+  const pings = hold ? keepPings(hold, ttlMs) : undefined
+  // a ping reads the cache once: 0.1x the input price, which a write costs 2x (1-hour cache) or 1.25x (5-minute)
+  const keepUsd = m && pings ? ((Number(m[2]!.replace(/,/g, '')) / 1e6) * Number(m[3]) * (ttlMs >= 60 * 60_000 ? 0.05 : 0.08) * pings).toFixed(2) : undefined
   const lines = [`${by} 플러그인이 이 프롬프트를 막았습니다.`]
   if (m) {
-    lines.push(`프롬프트 캐시가 ${koDuration(m[1]!)} 전에 식어서, 지금 보내면 ${m[2]}토큰을 다시 기록합니다: $${m[3]} (캐시가 살아 있었으면 $${m[4]})`)
-    if (hold) lines.push(`보내면 ${by}의 /keepwarm이 ${koDuration(hold)} 동안 캐시를 유지합니다.`)
+    lines.push(`프롬프트 캐시가 ${koDuration(m[1]!)} 전에 식어서, 지금 보내면 ${m[2]}토큰을 다시 기록합니다: $${m[4]} (캐시가 살아 있었으면 $${m[5]})`)
+    if (hold) lines.push(`${koDuration(hold)} 유지를 고르면 ${by}가 ${keepUsd ? `50분마다 캐시를 갱신합니다(${pings}번, 약 $${keepUsd})` : '/keepwarm으로 캐시를 유지합니다'}. 보내기만 고르면 유지를 켜지 않습니다.`)
   } else lines.push(why.length > 600 ? `${why.slice(0, 599)}…` : why)
   // cache-tax lets the same prompt through when it is sent again: cancelling then resending pays all the same
   lines.push(`그래도 보낼까요? ${PUT_BACK}하면 입력창에 되돌립니다.${m ? ` 입력창에서 다시 보내면 ${by}가 비용을 내는 것으로 보고 통과시킵니다.` : ''}`)
-  return { question: lines.join('\n'), cost: m?.[3] }
+  return { question: lines.join('\n'), cost: m?.[4], hold, keepUsd }
+}
+
+// How many times cache-tax refreshes a 1-hour cache over the hold: every 50 minutes, as its status line counts down.
+// shortcut: its 5-minute cadence is not known here, so a 5-minute cache gets no count and no cost
+export function keepPings(hold: string, ttlMs: number) {
+  const p = /^(?:(\d+)h)?(?:(\d+)m)?$/.exec(hold)
+  if (!p || ttlMs < 60 * 60_000) return undefined
+  return Math.floor(((Number(p[1]) || 0) * 60 + (Number(p[2]) || 0)) / 50) || undefined
 }
 
 // 38h39m -> 38시간 39분, 3h00m -> 3시간, 5m -> 5분; anything else as it came.
@@ -605,17 +621,19 @@ async function warnIfCacheTaxAbove($: EngineInterface, trace: readonly { plugin:
   $.ui.toast('cache-tax가 먼저 실행돼 막힘 확인 카드가 안 뜹니다 · token-gauge를 플러그인 목록 앞으로(README)', { timeoutMs: 15_000 }) // one terminal line
 }
 
-// So the cache hold the drop promised is asked of /keepwarm here.
-async function sendAnyway($: EngineInterface, text: string, reason: string) {
+// The hold the person chose is asked of /keepwarm; with none, `/keepwarm off`, since cache-tax holds the cache on its
+// own once a cold write is paid. Commands wait for the turn to end, so this runs after cache-tax's own.
+async function sendAnyway($: EngineInterface, text: string, hold: string | undefined) {
   const sent = await $.prompt.submit({ text, asUser: true })
   if (sent.drop !== undefined) {
     $.ui.toast(`다시 보낸 프롬프트도 막혔습니다: ${sent.drop}`)
     await $.prompt.fill({ text, mode: 'replace' })
     return
   }
-  const hold = keepwarmHold(reason)
-  const kept = hold && JSON.stringify(await $.command.list().catch(() => [])).includes('"keepwarm"') && (await $.command.run({ command: 'keepwarm', args: hold }).then(() => true).catch(() => false))
-  $.ui.toast(kept ? `다시 보냈습니다 · /keepwarm으로 ${koDuration(hold!)} 동안 캐시를 유지합니다` : '다시 보냈습니다')
+  if (!JSON.stringify(await $.command.list().catch(() => [])).includes('"keepwarm"')) return $.ui.toast('다시 보냈습니다')
+  const done = await $.command.run({ command: 'keepwarm', args: hold ?? 'off' }).then(() => true).catch(() => false)
+  if (!done) return $.ui.toast('다시 보냈습니다 · /keepwarm을 실행하지 못했습니다')
+  $.ui.toast(hold ? `다시 보냈습니다 · /keepwarm으로 ${koDuration(hold)} 동안 캐시를 유지합니다` : '다시 보냈습니다 · 캐시 유지는 켜지 않았습니다')
 }
 
 // A tip toast, once per key a session, when alerts are on.
