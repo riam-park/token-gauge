@@ -135,7 +135,7 @@ describe('token-gauge', () => {
     expect(v.plan?.cost).toBeUndefined()
     expect(detail(calm, '오늘')).toBe('세션 3개 · 입력 1.9M / 출력 84k')
     expect(view({ ...calm, tokens: 700_000 }, NOW, true).ctx?.offerActions).toBe(false) // 72% < 80%
-    expect(handoffText('notes')).toContain('`notes/<YYMMDD>_<task>/PROMPT_<작업 내용>.md`')
+    expect(handoffText('notes')).toContain('`notes` 폴더에 Markdown 파일로') // no file-name pattern: that is the person's own rule
     configure({})
   })
 
@@ -518,5 +518,37 @@ describe('token-gauge', () => {
     await $.session.start({ isInteractive: false, cwd: '/w' })
     expect((await $.prompt.submit({ text: 'go', origin: { kind: 'sdk' } })).drop).toBe('test: cold')
     expect(asked.length).toBe(0)
+  })
+
+  // 2026-10-23: presses during a long turn showed nothing and queued /compact and the memo twice each
+  test('/compact pressed again while it waits: said at once, run once', async ($: any, on: any) => {
+    mock.clock(on, { now: NOW })
+    const toasts: string[] = []
+    const runs: string[] = []
+    let finish = () => {}
+    on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+    on('session.usage', () => ({ value: { startedAt: NOW, context: { tokens: 800_000, window: 1_000_000 }, rateLimits: calm.limits } }))
+    on('ui.render', ($$: any, e: any) => $$.ui.resolve(e).Text({ children: 'engine band' }))
+    on('ui.toast', (_$: any, e: any) => {
+      toasts.push(e.text)
+      return { value: undefined }
+    })
+    on('command.run', (_$: any, e: any) => {
+      runs.push(e.command)
+      return new Promise(res => (finish = () => res({ text: 'Compacted' })))
+    })
+    await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
+    const ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 200 } })
+    await ui.press({ key: 'token-gauge-compact' })
+    await ui.press({ key: 'token-gauge-compact' })
+    for (let i = 0; i < 50 && runs.length === 0; i++) await new Promise(res => setTimeout(res, 1))
+    expect(runs).toEqual(['compact'])
+    expect(toasts).toEqual(['/compact를 실행합니다 · 컨텍스트가 크면 1~2분 걸립니다', '이미 눌렀습니다 · 차례가 되면 /compact를 실행합니다'])
+    finish()
+    for (let i = 0; i < 5; i++) await new Promise(res => setTimeout(res, 1))
+    await ui.press({ key: 'token-gauge-compact' }) // done: a new press runs again
+    for (let i = 0; i < 50 && runs.length < 2; i++) await new Promise(res => setTimeout(res, 1))
+    expect(runs.length).toBe(2)
+    await ui.unmount()
   })
 })

@@ -69,7 +69,7 @@ export function handoffText(dir: string, lost: readonly string[] = []) {
   const keep = lost.length ? ` compact 요약에 빠진 편집 파일도 메모에 넣어 줘: ${lost.join(', ')}` : ''
   if (!dir) return `지금까지의 작업을 인계 메모로 정리해 줘. 파일은 만들지 말고 이 답변에 ${parts}을 써 줘. 새 세션에 이 답변을 붙여 넣어 이어서 작업할 거야.${keep}`
   return (
-    `지금까지의 작업을 인계 메모로 정리해 줘. 저장소의 \`${dir}/<YYMMDD>_<task>/PROMPT_<작업 내용>.md\`에 ` +
+    `지금까지의 작업을 인계 메모로 정리해 줘. 저장소의 \`${dir}\` 폴더에 Markdown 파일로 ` +
     `${parts}을 쓰고 경로를 알려 줘. 새 세션에서 이 파일로 이어서 작업할 거야.${keep}`
   )
 }
@@ -155,6 +155,7 @@ let timer: Timer | undefined
 let hasKeepwarm = false
 let showDetail = false
 let work: Work | undefined // the main-thread turn in progress
+const pressed = new Set<string>() // buttons whose command waits in the queue: a second press would queue it again
 let turnItems: Item[] = []
 let turnBase: number | undefined // the context when the main-thread turn began, for its ▲ growth
 let mine: Day = { usd: 0, input: 0, output: 0 } // this session's share of today
@@ -387,12 +388,8 @@ async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, colu
         .then(() => $.ui.toast('cache-tax: 90분 동안 캐시를 유지합니다 · /keepwarm off로 취소'))
         .catch(() => $.ui.toast('cache-tax의 /keepwarm을 실행하지 못했습니다'))
     },
-    compact: () => {
-      $.command.run({ command: 'compact' }).catch(() => $.ui.toast('/compact를 실행하지 못했습니다'))
-    },
-    handoff: () => {
-      $.prompt.submit({ text: handoffText(cfg.handoffDir, snap.compaction?.lost), asUser: true }).catch(() => $.ui.toast('Claude가 작업 중이라 보내지 못했습니다'))
-    },
+    compact: () => queue($, 'compact', '/compact를 실행', () => $.command.run({ command: 'compact' })),
+    handoff: () => queue($, 'handoff', '인계 메모를 요청', () => $.prompt.submit({ text: handoffText(cfg.handoffDir, snap.compaction?.lost), asUser: true })),
     toggle: () => {
       showDetail = !showDetail
       if (showDetail) void readToday($).then(() => $.ui.invalidate('ui.render')).catch(() => {})
@@ -400,6 +397,17 @@ async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, colu
     },
   }
   return draw(ui, v, textBars, act, working, isYielding)
+}
+
+// A press while Claude works waits for the turn's end with nothing on screen, and a big context answers slowly:
+// say so at once, and take the press once until it runs.
+function queue($: EngineInterface, key: string, what: string, run: () => Promise<unknown>) {
+  if (pressed.has(key)) return $.ui.toast(`이미 눌렀습니다 · 차례가 되면 ${what}합니다`)
+  pressed.add(key)
+  $.ui.toast(work ? `작업이 끝나면 ${what}합니다` : `${what}합니다 · 컨텍스트가 크면 1~2분 걸립니다`)
+  run()
+    .catch(() => $.ui.toast(`${what}하지 못했습니다`))
+    .finally(() => pressed.delete(key))
 }
 
 function takeLimits(rateLimits: readonly Limit[] | undefined, costUsd: number | undefined) {
