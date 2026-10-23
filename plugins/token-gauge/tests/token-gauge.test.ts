@@ -457,7 +457,7 @@ describe('token-gauge', () => {
     await $.prompt.submit({ text: 'a', origin: { kind: 'composer' } })
     await $.prompt.submit({ text: 'b', origin: { kind: 'composer' } })
     for (let i = 0; i < 50 && toasts.length === 0; i++) await new Promise(res => setTimeout(res, 1))
-    expect(toasts.filter(t => t.startsWith('cache-tax가 token-gauge보다 먼저 실행되어')).length).toBe(1)
+    expect(toasts.filter(t => t.startsWith('cache-tax가 먼저 실행돼')).length).toBe(1)
   })
 
   test('a plain -p run: a dropped sdk prompt keeps its drop and asks nothing', async ($: any, on: any) => {

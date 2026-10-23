@@ -601,7 +601,7 @@ export function koDuration(d: string) {
 async function warnIfCacheTaxAbove($: EngineInterface, trace: readonly { plugin: string }[]) {
   if (!cfg.alerts || trace.some(t => t.plugin === 'cache-tax')) return
   if (!JSON.stringify(await $.command.list().catch(() => [])).includes('"keepwarm"')) return
-  $.ui.toast('cache-tax가 token-gauge보다 먼저 실행되어, 막힌 프롬프트 확인 카드가 뜨지 않습니다 · CLAUDE_CODE_PLUGIN_DIRS나 enabledPlugins에서 token-gauge를 앞에 두고 새 세션을 여세요', { timeoutMs: 15_000 })
+  $.ui.toast('cache-tax가 먼저 실행돼 막힘 확인 카드가 안 뜹니다 · token-gauge를 플러그인 목록 앞으로(README)', { timeoutMs: 15_000 }) // one terminal line
 }
 
 // So the cache hold the drop promised is asked of /keepwarm here.
