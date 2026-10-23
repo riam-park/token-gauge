@@ -155,7 +155,7 @@ let timer: Timer | undefined
 let hasKeepwarm = false
 let showDetail = false
 let work: Work | undefined // the main-thread turn in progress
-const pressed = new Set<string>() // buttons whose command waits in the queue: a second press would queue it again
+const pressed = new Map<string, number>() // buttons whose command waits or runs, by main turns done at the press: a second press would queue it again
 let turnItems: Item[] = []
 let turnBase: number | undefined // the context when the main-thread turn began, for its ▲ growth
 let mine: Day = { usd: 0, input: 0, output: 0 } // this session's share of today
@@ -285,6 +285,8 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId) return result // a subagent's turn fills its own window
+    // a press from before this turn had its turn to run by now: a queued line someone removed never settles
+    for (const [key, turns] of pressed) if (turns < mainTurns) pressed.delete(key)
     work = undefined
     const sample = turnSample(steps, turnItems.reduce((a, i) => a + i.tokens, 0))
     if (sample) samples = [...samples, sample].slice(-SAMPLES)
@@ -403,11 +405,15 @@ async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, colu
 // say so at once, and take the press once until it runs.
 function queue($: EngineInterface, key: string, what: string, run: () => Promise<unknown>) {
   if (pressed.has(key)) return $.ui.toast(`이미 눌렀습니다 · 차례가 되면 ${what}합니다`)
-  pressed.add(key)
+  pressed.set(key, mainTurns)
+  $.ui.invalidate('ui.render') // the button now reads 대기 중 or 실행 중
   $.ui.toast(work ? `작업이 끝나면 ${what}합니다` : `${what}합니다 · 컨텍스트가 크면 1~2분 걸립니다`)
   run()
     .catch(() => $.ui.toast(`${what}하지 못했습니다`))
-    .finally(() => pressed.delete(key))
+    .finally(() => {
+      pressed.delete(key)
+      $.ui.invalidate('ui.render')
+    })
 }
 
 function takeLimits(rateLimits: readonly Limit[] | undefined, costUsd: number | undefined) {
@@ -830,7 +836,7 @@ function workCells(w: Work & { elapsed: number }) {
 
 function width(v: View) {
   // borders, padding, the bars drawn wider than their two glyphs, the ▾ button and the compact buttons
-  return [...text(v)].length + 24 + (v.ctx?.offerActions ? 32 : 0)
+  return [...text(v)].length + 24 + (v.ctx?.offerActions ? 32 + (pressed.has('compact') ? 8 : 0) : 0)
 }
 
 type Actions = { keepWarm: () => void; compact: () => void; handoff: () => void; toggle: () => void }
@@ -893,8 +899,9 @@ function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working: (Wor
     chips.push(chip('token-gauge-work', C.yellow, kids))
   }
   if (v.ctx?.offerActions && !working && !isYielding) {
-    chips.push(<Button key="token-gauge-compact" label="/compact" onPress={act.compact} />)
-    chips.push(<Button key="token-gauge-handoff" label="인계 메모 후 새 세션" onPress={act.handoff} />)
+    const state = work ? '대기 중' : '실행 중' // a pressed button: waiting for the turn, or running
+    chips.push(<Button key="token-gauge-compact" label={pressed.has('compact') ? `/compact ${state}` : '/compact'} onPress={act.compact} />)
+    chips.push(<Button key="token-gauge-handoff" label={pressed.has('handoff') ? `인계 메모 ${state}` : '인계 메모 후 새 세션'} onPress={act.handoff} />)
   }
   if (!isYielding) chips.push(<Button key="token-gauge-more" label={showDetail ? '▴ 접기' : '▾ 상세'} hotkey="d" plain dimColor onPress={act.toggle} />)
 

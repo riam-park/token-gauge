@@ -543,12 +543,46 @@ describe('token-gauge', () => {
     await ui.press({ key: 'token-gauge-compact' })
     for (let i = 0; i < 50 && runs.length === 0; i++) await new Promise(res => setTimeout(res, 1))
     expect(runs).toEqual(['compact'])
+    expect(await ui.find({ type: 'Button', label: '/compact 실행 중' })).toBeDefined()
     expect(toasts).toEqual(['/compact를 실행합니다 · 컨텍스트가 크면 1~2분 걸립니다', '이미 눌렀습니다 · 차례가 되면 /compact를 실행합니다'])
     finish()
     for (let i = 0; i < 5; i++) await new Promise(res => setTimeout(res, 1))
     await ui.press({ key: 'token-gauge-compact' }) // done: a new press runs again
     for (let i = 0; i < 50 && runs.length < 2; i++) await new Promise(res => setTimeout(res, 1))
     expect(runs.length).toBe(2)
+    await ui.unmount()
+  })
+
+  test('a memo request that never starts frees its button after the next turn', async ($: any, on: any) => {
+    mock.clock(on, { now: NOW })
+    const sent: string[] = []
+    on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+    on('session.usage', () => ({ value: { startedAt: NOW, context: { tokens: 800_000, window: 1_000_000 }, rateLimits: calm.limits } }))
+    on('ui.render', ($$: any, e: any) => $$.ui.resolve(e).Text({ children: 'engine band' }))
+    on('ui.toast', () => ({ value: undefined }))
+    on('agent.list', () => ({ value: [] }))
+    on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
+    on('turn.complete', () => ({ text: '' }))
+    on('prompt.submit', (_$: any, e: any) => {
+      sent.push(e.text)
+      return new Promise(() => {}) // its queued line was removed: never settles
+    })
+    await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
+    const band = () => $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 200 } })
+    let ui = await band()
+    await ui.press({ key: 'token-gauge-handoff' })
+    for (let i = 0; i < 50 && sent.length === 0; i++) await new Promise(res => setTimeout(res, 1))
+    expect(await ui.find({ type: 'Button', label: '인계 메모 실행 중' })).toBeDefined()
+    await ui.unmount()
+    for (const turnId of ['t1', 't2']) {
+      await $.turn.start({ text: 'go', turnId })
+      await $.turn.complete({ answer: '', durationMs: 1000, isAborted: false, turnId, reason: 'answer' })
+    }
+    ui = await band()
+    expect(await ui.find({ type: 'Button', label: '인계 메모 후 새 세션' })).toBeDefined()
+    await ui.press({ key: 'token-gauge-handoff' })
+    for (let i = 0; i < 50 && sent.length < 2; i++) await new Promise(res => setTimeout(res, 1))
+    expect(sent.length).toBe(2)
     await ui.unmount()
   })
 })
