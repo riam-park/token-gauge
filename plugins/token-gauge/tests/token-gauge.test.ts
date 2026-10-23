@@ -337,6 +337,23 @@ describe('token-gauge', () => {
     })
   }
 
+  // the ⏳ chip takes room of its own: on a narrow line the cost and then 7d give way, rather than the row wrapping
+  test('while Claude works, the line leaves the ⏳ chip room', async ($: any, on: any) => {
+    engine(on)
+    on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
+    await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
+    const band = (isWorking: boolean) => $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking, maxRows: 10, bodyColumns: 104 } })
+    let ui = await band(false)
+    expect(await ui.find({ type: 'Text', text: '$1.27' })).toBeDefined() // idle: the whole line fits
+    await ui.unmount()
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    ui = await band(true)
+    expect(await ui.find({ type: 'Text', text: '⏳' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '$1.27' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '7d' })).toBeUndefined()
+    await ui.unmount()
+  })
+
   test('during a turn the context chip is read again every few seconds; ▲ is the growth since the turn began', async ($: any, on: any) => {
     const clock = mock.clock(on, { now: NOW })
     mock.store(on)

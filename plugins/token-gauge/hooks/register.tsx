@@ -375,7 +375,8 @@ export const register: Register = (on, options) => {
 // The chip row (and the detail panel when open) for one site; undefined with nothing to show yet.
 async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, columns: number, state: 'idle' | 'working' | 'question', isYielding: boolean) {
   const now = await $.clock.now()
-  const v = fit(view(snap, now, hasKeepwarm), columns)
+  const working = state === 'working' && work ? { ...work, elapsed: now - work.since } : undefined
+  const v = fit(view(snap, now, hasKeepwarm), columns - (working ? workCells(working) : 0))
   if (!v.plan && !v.ctx && !v.cache) return undefined
   const act = {
     keepWarm: () => {
@@ -396,7 +397,6 @@ async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, colu
       $.ui.invalidate('ui.render')
     },
   }
-  const working = state === 'working' && work ? { ...work, elapsed: now - work.since } : undefined
   return draw(ui, v, textBars, act, working, isYielding)
 }
 
@@ -790,6 +790,12 @@ export function text(v: View): string {
   }
   if (v.model) chips.push(`[${v.model.name}${v.model.effort ? ` · ${v.model.effort}` : ''}]`)
   return chips.join('  ')
+}
+
+// The ⏳ chip's cells, so the line leaves it room: its text (a Hangul syllable or ⏳ two cells), border, padding and the gap.
+function workCells(w: Work & { elapsed: number }) {
+  const t = `⏳ ${mmss(w.elapsed)} · 도구 ${w.tools}${w.agents ? ` · subagent ${w.agents} 실행 중` : ''}`
+  return [...t].reduce((n, c) => n + (/[가-힣⏳]/.test(c) ? 2 : 1), 0) + 5
 }
 
 function width(v: View) {
