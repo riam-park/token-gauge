@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-23
+
 ### 추가
 
 - `인계 메모` 버튼에 어림 금액: `인계 메모 ≈$0.22`. 지금 컨텍스트를 한 번 읽는 값(캐시가 식었으면 다시 기록하는 값)과 메모 약 3k 토큰을 쓰는 값입니다. `showCost`를 따릅니다.
@@ -133,7 +135,8 @@
 - 캐시 10분 이하에서 `유지 90분` 버튼(cache-tax 연동), 작업 중 칩, 알림, `d` 단축키
 - 초보자용 README와 토큰·캐시 절약 가이드
 
-[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.5.1...HEAD
+[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.6.0...HEAD
+[1.6.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.6.0
 [1.5.1]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.5.1
 [1.5.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.5.0
 [1.4.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.4.0
