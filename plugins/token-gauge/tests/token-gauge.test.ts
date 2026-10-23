@@ -116,10 +116,10 @@ describe('token-gauge', () => {
       on('ui.render', ($$: any, e: any) => $$.ui.resolve(e).Text({ children: 'engine band' }))
       await $.session.start({ surface, isInteractive: true, cwd: '/work' })
       const ui = await $.ui.mount({ plugin: 'token-gauge', surface, component: 'AbovePrompt', props: { hasSurvey, isWorking: false, maxRows: 10, bodyColumns: 160 } })
-      // the chips stay, a survey or not; 2026-10-24: on the desktop the band is the line under the prompt, one row high
-      expect(await ui.find({ type: 'Text', text: surface === 'terminal' ? '☀' : /^🟢 5h 5% ↻2h52 · 🟢 7d 38% ↻3d0h · \$1\.27 · 🟢 ctx 113k\/1M 11%$/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: '☀' })).toBeDefined() // the chips stay, a survey or not
       expect(await ui.find({ type: 'Text', text: /engine band/ })).toBeDefined() // stacked, not replaced
-      expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+      expect(Boolean(await ui.find({ type: 'Svg' }))).toBe(surface === 'desktop')
+      expect(Boolean(await ui.find({ type: 'Text', text: '│' }))).toBe(surface === 'desktop') // 2026-10-24: no borders there, one row high
       expect(Boolean(await ui.find({ type: 'Button', text: '▾ 상세' }))).toBe(!hasSurvey) // a survey keeps the row free of buttons
       expect(await ui.find({ type: 'Text', text: /^리셋/ })).toBeUndefined() // closed until pressed
       await ui.unmount()
@@ -601,23 +601,23 @@ describe('token-gauge', () => {
   })
 
   // 2026-10-24: the desktop hides the band under its next-step box; the footer under the prompt stays
-  test('the footer line: the chips but the model, each led by its chip color as a dot', () => {
-    expect(footerLine(view(calm, NOW, false))).toBe('🟢 5h 5% ↻2h52 · 🟢 7d 38% ↻3d0h · $1.27 · 🟢 ctx 113k/1M 11% ▲1.3k ≈ 675턴 · 🔵 ❄ 59:06')
+  test('the footer line: the band as text, the chips split by a bar, the model left out', () => {
+    expect(footerLine(view(calm, NOW, false))).toBe('plan 5h 5% ▱▱▱▱▱▱ ↻2h52 · 7d 38% ↻3d0h · $1.27  │  ☀ context ▰▱▱▱▱▱▱▱ 113k / 1M 11% · ▲1.3k · ≈ 675턴  │  ❄ 59:06')
     const limits = [
       { kind: 'five_hour', percentUsed: 80, resetsAt: at(172 * MIN) },
       { kind: 'seven_day', percentUsed: 95, resetsAt: at(3 * 24 * 60 * MIN) },
     ]
     const busy: Snapshot = { ...calm, limits, tokens: 800_000, lastRequestAt: NOW - 55 * MIN }
-    expect(footerLine(view(busy, NOW, false))).toMatch(/^🟡 5h 80% ↻2h52 · 🔴 7d 95% ↻3d0h · \$1\.27 · 🟠 ctx 800k\/1M 80% ▲1\.3k ≈ \d+턴 · 🟡 ❄ 5:00$/)
-    expect(footerLine(view({ ...busy, lastRequestAt: NOW - 2 * 60 * MIN }, NOW, false))).toMatch(/ · 🔴 ❄ cold 재기록 ~800k$/)
-    expect(footerLine(view(calm, NOW, false), { since: 0, elapsed: 7_000, tools: 1, agents: 1 })).toMatch(/ · ⏳ 0:07 도구 1 subagent 1$/) // while Claude works
+    expect(footerLine(view(busy, NOW, false))).toMatch(/^plan 5h 80% ▰▰▰▰▰▱ ↻2h52 · 7d 95% ↻3d0h · \$1\.27 {2}│ {2}☇ context [▰▱]{8} 800k \/ 1M 80% · ▲1\.3k · ≈ \d+턴 {2}│ {2}❄ 5:00$/)
+    expect(footerLine(view({ ...busy, lastRequestAt: NOW - 2 * 60 * MIN }, NOW, false))).toMatch(/ {2}│ {2}❄ cold 재기록 ~800k$/)
+    expect(footerLine(view(calm, NOW, false), { since: 0, elapsed: 7_000, tools: 1, agents: 1 })).toMatch(/ {2}│ {2}⏳ 0:07 · 도구 1 · subagent 1 실행 중$/) // while Claude works
     expect(footerLine(view({ ...calm, limits: [], costUsd: undefined, tokens: undefined, lastRequestAt: undefined }, NOW, false))).toBeUndefined()
   })
 
   const settle = async () => {
     for (let i = 0; i < 10; i++) await new Promise(res => setTimeout(res, 1))
   }
-  const LINE = '🟢 5h 5% ↻2h52 · 🟢 7d 38% ↻3d0h · 🟢 ctx 113k/1M 11%'
+  const LINE = /^plan 5h 5% ▱{6} ↻2h52 · 7d 38% ↻3d0h {2}│ {2}☀ context [▰▱]{8} 113k \/ 1M 11%$/
   function footerEngine(on: any) {
     const lines: (string | undefined)[] = []
     on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
@@ -649,7 +649,7 @@ describe('token-gauge', () => {
     await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'done', ask: '진행할까요?' })
     await clock.advance(1000)
     await settle()
-    expect(lines.at(-1)).toBe(LINE)
+    expect(lines.at(-1)).toMatch(LINE)
     await $.turn.start({ text: 'go', turnId: 't1' }) // answered: the box is gone
     await clock.advance(1000)
     await settle()

@@ -407,9 +407,9 @@ async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, flat
   const now = await $.clock.now()
   const working = state === 'working' && work ? { ...work, elapsed: now - work.since } : undefined
   const room = columns - (working ? workCells(working) : 0)
-  const v = flat ? view(snap, now, hasKeepwarm) : fit(view(snap, now, hasKeepwarm), room)
+  const v = fit(view(snap, now, hasKeepwarm), room)
   if (!v.plan && !v.ctx && !v.cache) return undefined
-  if (!flat && width(v) > room) return questionLine(ui, v, working) // too narrow for the chips even folded: one line of text, as above a question
+  if (width(v) > room) return questionLine(ui, v, working) // too narrow for the chips even folded: one line of text, as above a question
   return draw(ui, v, textBars, flat, actions($), working, isYielding)
 }
 
@@ -866,25 +866,24 @@ export function text(v: View): string {
   return chips.join('  ')
 }
 
-// The footer under the prompt draws text alone: each part is led by its chip's color as a colored dot.
-const DOT: Record<string, string> = { [C.green]: '🟢', [C.cyan]: '🔵', [C.blue]: '🔵', [C.violet]: '🟣', [C.yellow]: '🟡', [C.orange]: '🟠', [C.red]: '🔴' }
-
-// The chips' parts but the model (the footer shows it beside), for the line under the prompt, the band on the
-// graphical surfaces and the pane alike.
-//   🟢 5h 17% ↻2h32 · 🟡 7d 82% ↻20h42 · $18.14 · 🟣 ctx 497k/1M 50% ▲1.3k ≈ 380턴 · 🔵 ❄ 60:00 · ⏳ 0:07 도구 1 subagent 1
-export function lineParts(v: View, working?: Work & { elapsed: number }) {
-  const parts: string[] = []
+// The band as text, for the footer under the prompt, which draws text alone: the chips split by a bar, their bars
+// as ▰▱, the model left out (the footer shows it beside).
+//   plan 5h 23% ▰▱▱▱▱▱ ↻1h42 · 7d 83% ↻19h52 · $0.81  │  ☀ context ▰▱▱▱▱▱▱▱ 111k / 1M 11%  │  ❄ 51:20  │  ⏳ 0:06 · 도구 0
+export function footerLine(v: View, working?: Work & { elapsed: number }) {
+  const chips: string[] = []
   const p = v.plan
-  if (p?.five) parts.push(`${DOT[p.five.color]} 5h ${p.five.percent}%${p.five.reset ? ` ↻${p.five.reset}` : ''}`)
-  if (p?.seven) parts.push(`${DOT[p.seven.color]} 7d ${p.seven.percent}%${p.seven.reset ? ` ↻${p.seven.reset}` : ''}`)
-  if (p?.cost) parts.push(p.cost)
-  if (v.ctx) parts.push([`${DOT[v.ctx.color]} ctx ${v.ctx.used}/${v.ctx.window} ${v.ctx.percent}%`, v.ctx.delta, v.ctx.turns].filter(Boolean).join(' '))
-  if (v.cache) parts.push([`${DOT[v.cache.color]} ❄ ${v.cache.text}`, v.cache.rewrite].filter(Boolean).join(' '))
-  if (working) parts.push(`⏳ ${mmss(working.elapsed)} 도구 ${working.tools}${working.agents ? ` subagent ${working.agents}` : ''}`)
-  return parts
+  if (p) {
+    const parts: string[] = []
+    if (p.five) parts.push(`5h ${p.five.percent}% ${textBar(p.five.bar.percent, 6)}${p.five.reset ? ` ↻${p.five.reset}` : ''}`)
+    if (p.seven) parts.push(`7d ${p.seven.percent}%${p.seven.reset ? ` ↻${p.seven.reset}` : ''}`)
+    if (p.cost) parts.push(p.cost)
+    chips.push(`plan ${parts.join(' · ')}`)
+  }
+  if (v.ctx) chips.push([`${v.ctx.icon} context ${textBar(v.ctx.bar.percent, 8)} ${v.ctx.used} / ${v.ctx.window} ${v.ctx.percent}%`, v.ctx.delta, v.ctx.turns].filter(Boolean).join(' · '))
+  if (v.cache) chips.push([`❄ ${v.cache.text}`, v.cache.rewrite].filter(Boolean).join(' '))
+  if (working) chips.push(`⏳ ${mmss(working.elapsed)} · 도구 ${working.tools}${working.agents ? ` · subagent ${working.agents} 실행 중` : ''}`)
+  return chips.join('  │  ') || undefined
 }
-
-export const footerLine = (v: View, working?: Work & { elapsed: number }) => lineParts(v, working).join(' · ') || undefined
 
 // The footer line, on the desktop while a next-step box hides the band, the only time the band is gone that a plugin
 // can tell. Written each second it changes, the cache countdown and the ⏳ time with it.
@@ -939,8 +938,7 @@ type Actions = { keepWarm: () => void; compact: () => void; handoff: () => void;
 function draw(ui: any, v: View, isTerminal: boolean, flat: boolean, act: Actions, working: (Work & { elapsed: number }) | undefined, isYielding: boolean) {
   const { Box, Text, Button } = ui
   const keep = v.cache?.offerKeep && !isYielding ? <Button key="token-gauge-keep" label="유지 90분" onPress={act.keepWarm} /> : undefined
-  // the graphical surfaces draw the band as the line under the prompt, so the two read the same
-  const row = flat ? [<Text key="token-gauge-line" dimColor>{footerLine(v, working)}</Text>, ...(keep ? [keep] : [])] : chipRow(ui, v, isTerminal, keep, working)
+  const row = chipRow(ui, v, isTerminal, flat, keep, working)
   if (v.ctx?.offerActions && !working && !isYielding) {
     const a = actionLabels(v)
     row.push(<Button key="token-gauge-compact" label={a.compact} onPress={act.compact} />)
@@ -967,8 +965,9 @@ function draw(ui: any, v: View, isTerminal: boolean, flat: boolean, act: Actions
   )
 }
 
-// The terminal's chips, each in a border of its color; `keep` sits in the cache chip.
-function chipRow(ui: any, v: View, isTerminal: boolean, keep: unknown, working: (Work & { elapsed: number }) | undefined) {
+// The chips, each in a border of its color, or with no border split by a dim bar (`flat`: one row high, the
+// graphical surfaces); `keep` sits in the cache chip.
+function chipRow(ui: any, v: View, isTerminal: boolean, flat: boolean, keep: unknown, working: (Work & { elapsed: number }) | undefined) {
   const { Box, Text, Svg } = ui
   const dim = (s: string) => <Text dimColor>{s}</Text>
   const num = (s: string, color?: string) => (
@@ -982,11 +981,16 @@ function chipRow(ui: any, v: View, isTerminal: boolean, keep: unknown, working: 
     ) : (
       <Svg source={svgBar(b, cells * 8)} alt={`${Math.round(b.percent)}%`} width={cells * 8} height={8} />
     )
-  const chip = (key: string, color: string, kids: unknown[]) => (
-    <Box key={key} flexDirection="row" alignItems="center" gap={1} paddingX={1} borderStyle="round" borderColor={color}>
-      {kids}
-    </Box>
-  )
+  const chip = (key: string, color: string, kids: unknown[]) =>
+    flat ? (
+      <Box key={key} flexDirection="row" alignItems="center" gap={1}>
+        {kids}
+      </Box>
+    ) : (
+      <Box key={key} flexDirection="row" alignItems="center" gap={1} paddingX={1} borderStyle="round" borderColor={color}>
+        {kids}
+      </Box>
+    )
   const chips: unknown[] = []
   if (v.plan) {
     const p = v.plan
@@ -1025,7 +1029,7 @@ function chipRow(ui: any, v: View, isTerminal: boolean, keep: unknown, working: 
     if (working.agents) kids.push(dim(`· subagent ${working.agents} 실행 중`))
     chips.push(chip('token-gauge-work', C.yellow, kids))
   }
-  return chips
+  return flat ? chips.flatMap((c, i) => (i ? [<Text key={`token-gauge-bar-${i}`} dimColor>│</Text>, c] : [c])) : chips
 }
 
 // The detail panel's lines in a column of labels, the context breakdown under its line.
