@@ -42,11 +42,13 @@ const PERSON = new Set(['composer', 'bridge']) // prompt origins someone is ther
 const SEND_ANYWAY = '보내기'
 const PUT_BACK = '취소'
 const QUESTION_LINE = 80 // the terminal's line above a question: two of its 40-column rows
+const NEXT_STEP_TOOL = 'mcp__ccd_turn__wrap_up' // the desktop app's turn-end summary; with a question it is the next-step box
 
 // The userConfig options in plugin.json, asked at install and changed with /plugin configure or /config.
 // handoffDir '' asks for the handoff memo in the answer; a folder asks for a PROMPT file there.
-export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string }
-const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '' }
+// desktopSpot: on the desktop, the chip band above the prompt, one line in the footer under it (`below`), or both.
+export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string; desktopSpot: 'above' | 'both' | 'below' }
+const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', desktopSpot: 'above' }
 let cfg = DEFAULTS
 
 // Options as saved, checked: a missing or odd value keeps its default.
@@ -59,6 +61,7 @@ export function configure(o: Record<string, unknown>): Config {
     showCost: o.showCost !== false,
     alerts: o.alerts !== false,
     handoffDir: dir,
+    desktopSpot: o.desktopSpot === 'both' || o.desktopSpot === 'below' ? o.desktopSpot : 'above',
   }
   return cfg
 }
@@ -181,6 +184,9 @@ let mainTurns = 0
 let inWindow: { mcp: McpTool[]; memory: MemoryFile[] } = { mcp: [], memory: [] }
 let advised = new Set<string>()
 let orderChecked = false
+let seenDesktop = false // the band was drawn on the desktop: the footer line is the desktop's
+let turnCard = false // a next-step box is up, and the desktop hides the band under it
+let footerShown: string | undefined | null = null // the footer line last written; null until the first write
 
 function forget() {
   turnBase = undefined
@@ -215,6 +221,7 @@ export const register: Register = (on, options) => {
           // while Claude works the context grows request by request and result by result: read it again
           if (work && tick % REFRESH_TICKS === 0) await readContext($, false).catch(() => {})
           if (work || shouldRedraw(snap, now)) $.ui.invalidate('ui.render')
+          writeFooter($, now)
           alert($, now)
         })
         .catch(() => {})
@@ -240,6 +247,7 @@ export const register: Register = (on, options) => {
   on('turn.start', async ($, e, next) => {
     const result = await next(e)
     if (!e.agentId) {
+      turnCard = false // answered or passed over: a new turn closes the box
       work = { since: await $.clock.now(), tools: 0, agents: 0 }
       turnItems = []
       turnBase = snap.tokens
@@ -284,6 +292,9 @@ export const register: Register = (on, options) => {
       const tokens = estimate(result)
       turnItems.push({ label, tokens })
       observe($, input, label, tokens, fnv(resultText(result)))
+      // shortcut: the desktop app's next-step box, read off its tool as 2.1.308 names it; a box closed by hand is not
+      // seen, so the footer line stays until the next turn. Revisit if the app renames the tool.
+      if (input.tool === NEXT_STEP_TOOL && typeof input.ask === 'string' && input.ask) turnCard = true
     }
     return result
   }).catch(async ($, e, next) => next(e)) // observer only: never stands in the way of a tool
@@ -369,6 +380,8 @@ export const register: Register = (on, options) => {
   // The band above the prompt.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const rest = await next(e) // what other mods and Claude Code draw here stays
+    if (e.surface === 'desktop') seenDesktop = true
+    if (e.surface === 'desktop' && cfg.desktopSpot === 'below') return rest // the footer line stands in for the band
     // A survey (a question in the band) keeps the chip row, without buttons or the detail panel, so the question keeps the room
     const band = await bandTree($, $.ui.resolve(e), e.surface === 'terminal', e.props.bodyColumns - 2, e.props.isWorking ? 'working' : 'idle', e.props.hasSurvey)
     if (!band) return rest
@@ -848,6 +861,28 @@ export function text(v: View): string {
   }
   if (v.model) chips.push(`[${v.model.name}${v.model.effort ? ` · ${v.model.effort}` : ''}]`)
   return chips.join('  ')
+}
+
+// The footer under the prompt draws text alone: each part is led by its chip's color as a colored dot.
+const DOT: Record<string, string> = { [C.green]: '🟢', [C.cyan]: '🔵', [C.blue]: '🔵', [C.violet]: '🟣', [C.yellow]: '🟡', [C.orange]: '🟠', [C.red]: '🔴' }
+
+//   🟢 5h 10% · 🟡 7d 80% · 🟣 ctx 51% · 🔵 ❄ 60:00
+export function footerLine(v: View) {
+  const parts: string[] = []
+  if (v.plan?.five) parts.push(`${DOT[v.plan.five.color]} 5h ${v.plan.five.percent}%`)
+  if (v.plan?.seven) parts.push(`${DOT[v.plan.seven.color]} 7d ${v.plan.seven.percent}%`)
+  if (v.ctx) parts.push(`${DOT[v.ctx.color]} ctx ${v.ctx.percent}%`)
+  if (v.cache) parts.push(`${DOT[v.cache.color]} ❄ ${v.cache.text}`)
+  return parts.join(' · ') || undefined
+}
+
+// The footer line, on the desktop: always under `both` and `below`, under `above` while a next-step box hides the
+// band. Written each second it changes, the cache countdown with it.
+function writeFooter($: EngineInterface, now: number) {
+  const text = seenDesktop && (cfg.desktopSpot !== 'above' || turnCard) ? footerLine(view(snap, now, false)) : undefined
+  if (text === footerShown) return
+  footerShown = text
+  $.ui.status(text)
 }
 
 // Cells a text takes: a Hangul syllable or ⏳ two.

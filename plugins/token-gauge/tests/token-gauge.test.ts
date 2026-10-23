@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { advice, calibrate, cardText, compactArgs, configure, keepPings, droppedBy, estimate, fit, fnv, forecastText, handoffText, hitRate, isNewer, itemLabel, keepwarmHold, koDuration, largest, latestVersion, lostFiles, memoUsd, modelName, pace, pdfPages, readKind, redact, rewriteUsd, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
+import { advice, calibrate, cardText, compactArgs, configure, keepPings, droppedBy, estimate, fit, fnv, footerLine, forecastText, handoffText, hitRate, isNewer, itemLabel, keepwarmHold, koDuration, largest, latestVersion, lostFiles, memoUsd, modelName, pace, pdfPages, readKind, redact, rewriteUsd, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
 import type { Snapshot } from '../hooks/register'
 
 const NOW = Date.parse('2026-10-22T00:00:00Z')
@@ -126,7 +126,8 @@ describe('token-gauge', () => {
   }
 
   test('install options', () => {
-    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '' })
+    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '', desktopSpot: 'above' })
+    expect(configure({ desktopSpot: 'under' }).desktopSpot).toBe('above')
     expect(configure({ actionsAt: 200, handoffDir: '  ' })).toMatchObject({ actionsAt: 70, handoffDir: '' }) // odd values keep defaults
     expect(handoffText('')).toContain('파일은 만들지 말고 이 답변에') // no folder: the memo comes as the answer
     configure({ cacheTtl: '5m', actionsAt: 80, showCost: false, handoffDir: 'notes/' })
@@ -596,6 +597,78 @@ describe('token-gauge', () => {
     isFilled = false // a dialog holds the keys
     await ui.press({ key: 'token-gauge-compact' })
     expect(toasts).toEqual(['입력창에 넣지 못했습니다'])
+    await ui.unmount()
+  })
+
+  // 2026-10-24: the desktop hides the band under its next-step box; the footer under the prompt stays
+  test('the footer line: each part led by its chip color as a dot', () => {
+    expect(footerLine(view(calm, NOW, false))).toBe('🟢 5h 5% · 🟢 7d 38% · 🟢 ctx 11% · 🔵 ❄ 59:06')
+    const limits = [
+      { kind: 'five_hour', percentUsed: 80, resetsAt: at(172 * MIN) },
+      { kind: 'seven_day', percentUsed: 95, resetsAt: at(3 * 24 * 60 * MIN) },
+    ]
+    const busy: Snapshot = { ...calm, limits, tokens: 800_000, lastRequestAt: NOW - 55 * MIN }
+    expect(footerLine(view(busy, NOW, false))).toBe('🟡 5h 80% · 🔴 7d 95% · 🟠 ctx 80% · 🟡 ❄ 5:00')
+    expect(footerLine(view({ ...busy, lastRequestAt: NOW - 2 * 60 * MIN }, NOW, false))).toMatch(/ · 🔴 ❄ cold$/)
+    expect(footerLine(view({ ...calm, limits: [], costUsd: undefined, tokens: undefined, lastRequestAt: undefined }, NOW, false))).toBeUndefined()
+  })
+
+  const settle = async () => {
+    for (let i = 0; i < 10; i++) await new Promise(res => setTimeout(res, 1))
+  }
+  const LINE = '🟢 5h 5% · 🟢 7d 38% · 🟢 ctx 11%'
+  function footerEngine(on: any) {
+    const lines: (string | undefined)[] = []
+    on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+    on('session.usage', () => ({ value: { startedAt: NOW, context: { tokens: 113_000, window: 1_000_000 }, rateLimits: calm.limits } }))
+    on('ui.render', ($$: any, e: any) => $$.ui.resolve(e).Text({ children: `engine ${e.component}` }))
+    on('ui.status', (_$: any, e: any) => {
+      lines.push(e.text)
+      return { value: undefined }
+    })
+    return lines
+  }
+  const BAND = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 }
+
+  for (const [spot, surface, hasBand, hasLine] of [
+    ['below', 'desktop', false, true],
+    ['both', 'desktop', true, true],
+    ['below', 'terminal', true, false],
+  ] as const) {
+    test(`desktopSpot ${spot} on the ${surface}: band ${hasBand ? 'drawn' : 'left out'}, footer line ${hasLine ? 'written' : 'none'}`, { options: { desktopSpot: spot } }, async ($: any, on: any) => {
+      const clock = mock.clock(on, { now: NOW })
+      const lines = footerEngine(on)
+      await $.session.start({ surface, isInteractive: false, cwd: '/w' })
+      const ui = await $.ui.mount({ plugin: 'token-gauge', surface, component: 'AbovePrompt', props: BAND })
+      expect(Boolean(await ui.find({ type: 'Text', text: '☀' }))).toBe(hasBand)
+      expect(await ui.find({ type: 'Text', text: 'engine AbovePrompt' })).toBeDefined() // what others draw stays
+      await clock.advance(1000)
+      await settle()
+      expect(lines.filter(Boolean)).toEqual(hasLine ? [LINE] : [])
+      await ui.unmount()
+    })
+  }
+
+  test('desktopSpot above: the footer line only while a next-step box hides the band', async ($: any, on: any) => {
+    const clock = mock.clock(on, { now: NOW })
+    const lines = footerEngine(on)
+    on('tool.call', () => ({ result: 'ok' }))
+    on('agent.list', () => ({ value: [] }))
+    on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
+    await $.session.start({ surface: 'desktop', isInteractive: false, cwd: '/w' })
+    const ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+    await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'done' }) // a recap alone draws no box
+    await clock.advance(1000)
+    await settle()
+    expect(lines.filter(Boolean)).toEqual([])
+    await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'done', ask: '진행할까요?' })
+    await clock.advance(1000)
+    await settle()
+    expect(lines.at(-1)).toBe(LINE)
+    await $.turn.start({ text: 'go', turnId: 't1' }) // answered: the box is gone
+    await clock.advance(1000)
+    await settle()
+    expect(lines.at(-1)).toBeUndefined()
     await ui.unmount()
   })
 })

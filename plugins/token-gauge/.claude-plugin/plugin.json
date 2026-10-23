@@ -41,6 +41,13 @@
       "title": "인계 메모 폴더",
       "description": "비워 두면 인계 메모를 세션 답변으로 받습니다. 저장소 안 폴더(예: .temp)를 적으면 그 폴더에 PROMPT 파일로 쓰라고 요청합니다.",
       "default": ""
+    },
+    "desktopSpot": {
+      "type": "string",
+      "title": "데스크톱 표시 위치",
+      "description": "데스크톱 앱에서 칩을 어디에 보일지. above: 입력창 위 칩 줄(다음 단계 상자가 칩 줄을 가리는 동안은 입력창 밑에 한 줄로). both: 칩 줄과 입력창 밑 한 줄을 늘 함께. below: 입력창 밑 한 줄만(버튼과 ▾ 상세 없음). 터미널은 늘 칩 줄입니다.",
+      "options": ["above", "both", "below"],
+      "default": "above"
     }
   }
 }
