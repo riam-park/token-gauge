@@ -8,26 +8,24 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-23
+
 ### 추가
 
 - 식은 캐시 칩에 재기록 금액: `재기록 ~253k ≈$2.02`. 모델별 정가와 캐시 수명(1시간은 입력 단가의 2배, 5분은 1.25배)으로 계산하고 `showCost`를 따릅니다.
 - 플러그인 순서 경고: cache-tax가 token-gauge보다 바깥에 있으면 세션에서 처음 통과한 프롬프트 뒤에 한 번 토스트로 알립니다(`alerts`).
-- README: 토큰 절약 행동강령, 자주 묻는 질문에 "데스크톱에서 칩이 안 보여요"와 "확인 카드 없이 경고만 나와요".
+- README: 칩 줄과 상세 패널 번호 안내 그림, Claude Code 용어 절, 토큰 절약 행동강령, 자주 묻는 질문 "데스크톱에서 칩이 안 보여요"와 "확인 카드 없이 경고만 나와요", `CLAUDE_CODE_PLUGIN_DIRS`나 `--plugin-dir`로 불러올 때의 순서 안내.
 
 ### 변경
 
-- 막힌 프롬프트 질문 카드: 제목을 `token-gauge`로 하고 막은 mod를 첫 줄에 밝힙니다. cache-tax의 영어 안내는 한글로 바꿔 보이고(형식이 다르면 원문), `보내기` 버튼에 비용을 붙입니다. 고른 뒤 경고 자리에는 `token-gauge: ...`로 결과를 보이고, 보낸 뒤에는 토스트로 다시 보낸 것과 `/keepwarm` 유지를 알립니다.
-- 막힌 프롬프트 질문 카드: 다른 mod의 훅이 프롬프트를 막으면, 막혔다는 경고(`Prompt dropped by a hook`)를 띄우기 전에 먼저 `보내기`/`취소`를 묻습니다. 경고 자리에는 고른 결과가 짧게 나옵니다. 카드를 닫으면 원래 경고가 나옵니다.
+- 막힌 프롬프트 질문 카드: 다른 mod의 훅이 프롬프트를 막으면, 막혔다는 경고(`Prompt dropped by a hook`)를 띄우기 전에 `token-gauge` 제목의 카드로 먼저 `보내기`/`취소`를 묻습니다. 막은 mod를 첫 줄에 밝히고, cache-tax의 영어 안내는 한글로 바꿔 보이며(형식이 다르면 원문), `보내기` 버튼에 비용을 붙입니다. 고른 뒤 경고 자리에는 `token-gauge: ...`로 결과가 나오고, 보낸 뒤에는 토스트로 다시 보낸 것과 `/keepwarm` 유지를 알립니다. 카드를 닫으면 원래 경고가 나옵니다.
 
 ### 수정
 
-- 좁은 터미널에서 Claude가 일하는 동안 칩 줄이 찌그러져 두 줄로 깨지던 문제: 폭 계산에 `⏳` 칩을 넣어, 자리가 모자라면 비용과 7d를 먼저 접습니다.
 - 데스크톱 앱에서 막힌 프롬프트 질문 카드가 뜨지 않던 문제: 데스크톱 입력은 엔진에 `sdk`로 들어와 사람 입력으로 보지 않았습니다. 화면이 붙은 세션의 `sdk` 입력도 묻습니다.
-- README: `CLAUDE_CODE_PLUGIN_DIRS`나 `--plugin-dir`로 불러올 때도 token-gauge를 cache-tax보다 앞에 적어야 질문 카드가 뜬다는 안내를 넣었습니다.
+- 좁은 터미널에서 Claude가 일하는 동안 칩 줄이 찌그러져 두 줄로 깨지던 문제: 폭 계산에 `⏳` 칩을 넣어, 자리가 모자라면 비용과 7d를 먼저 접습니다.
 - 그림과 PDF를 Read하면 `큰 파일 통째 읽기` 팁이 뜨던 문제: offset/limit가 맞지 않는 파일이라 팁을 띄우지 않습니다.
 - 그림과 PDF Read 결과 크기 추정: base64 글자 수 대신 과금 방식대로 셉니다. 그림은 28×28 픽셀마다 1토큰(최대 4,784), PDF는 쪽마다 글자 2,250 + 쪽 그림 1,600으로 어림합니다. 상세 패널 `지난 턴`과 추정 배율에 반영됩니다.
-
-## [1.3.2] - 2026-10-22
 
 ### 제거
 
@@ -100,8 +98,8 @@
 - 캐시 10분 이하에서 `유지 90분` 버튼(cache-tax 연동), 작업 중 칩, 알림, `d` 단축키
 - 초보자용 README와 토큰·캐시 절약 가이드
 
-[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.3.2...HEAD
-[1.3.2]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.3.2
+[Unreleased]: https://github.com/riam-park/token-gauge/compare/token-gauge--v1.4.0...HEAD
+[1.4.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.4.0
 [1.3.1]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.3.1
 [1.3.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.3.0
 [1.2.0]: https://github.com/riam-park/token-gauge/releases/tag/token-gauge--v1.2.0
