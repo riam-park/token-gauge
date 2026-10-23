@@ -39,7 +39,7 @@ const PAGE_TEXT_TOKENS = 2_250 // the middle of the 1,500-3,000 a PDF page's tex
 const QUESTION_COLUMNS = 100 // a site with no measured width
 const REFRESH_TICKS = 3 // seconds between context reads while Claude works
 const PERSON = new Set(['composer', 'bridge']) // prompt origins someone is there to ask about
-const SEND_AGAIN = '다시 보내기'
+const SEND_ANYWAY = '보내기'
 const PUT_BACK = '취소'
 const QUESTION_LINE = 80 // the terminal's line above a question: two of its 40-column rows
 
@@ -318,15 +318,14 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  // A prompt the person sent that another plugin's hook dropped (cache-tax on a cold cache, say): a question card
-  // offers to send it again or to put it back in the box. Asked after the drop is returned, holding nothing up.
+  // A prompt the person sent that another plugin's hook dropped (cache-tax on a cold cache, say): before the drop is
+  // shown, a question card asks whether to send it anyway or put it back in the box. Waiting on the card does not
+  // count against the hook's time; the drop then shown is the answer's short line.
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
-    if (result.drop !== undefined && !e.command && !e.isMeta && PERSON.has(e.origin.kind)) {
-      const by = droppedBy(next.trace)
-      if (by) void askDropped($, e.text, by, result.drop).catch(() => {})
-    }
-    return result
+    if (result.drop === undefined || e.command || e.isMeta || !PERSON.has(e.origin.kind)) return result
+    const by = droppedBy(next.trace)
+    return by ? { drop: await askDropped($, e.text, by, result.drop) } : result
   }).catch(async ($, e, next) => next(e)) // observer only: never stands in the way of a prompt
 
   on('command.run', { command: 'effort' }, async ($, e, next) => {
@@ -545,24 +544,31 @@ function scaled(tokens: number) {
   return Math.round(tokens * (snap.k ?? 1))
 }
 
-// Send again as the plugin's own prompt, which cache-tax lets through: so the cache hold its drop promised is
-// asked of /keepwarm here. Anything else (cancel, a dismissed card, text typed under Other) goes back in the box.
+// The person's choice, and the line their drop shows for it. Sending goes out as the plugin's own prompt, which
+// cache-tax lets through, once this drop has settled (a timer, past this hook). Anything else (cancel, text typed under Other) goes back in
+// the box; a card never answered (dismissed, or no surface to ask on) keeps the hook's own reason.
 async function askDropped($: EngineInterface, text: string, by: string, reason: string) {
   const why = reason.startsWith(`${by}:`) ? reason.slice(by.length + 1).trimStart() : reason // the card names the plugin already
-  const question = `${by} 훅이 프롬프트를 막았습니다. ${why.length > 600 ? `${why.slice(0, 599)}…` : why} ${PUT_BACK}하면 입력창에 되돌립니다. 그대로 다시 보낼까요?`
-  const answer = await $.ui.ask(question, { options: [SEND_AGAIN, PUT_BACK], header: '프롬프트 차단' }).catch(() => undefined)
-  if (answer === SEND_AGAIN) {
-    const sent = await $.prompt.submit({ text, asUser: true })
-    if (sent.drop !== undefined) {
-      $.ui.toast(`다시 보낸 프롬프트도 막혔습니다: ${sent.drop}`)
-      await $.prompt.fill({ text, mode: 'replace' })
-      return
-    }
-    const hold = keepwarmHold(reason)
-    if (hold && JSON.stringify(await $.command.list().catch(() => [])).includes('"keepwarm"')) await $.command.run({ command: 'keepwarm', args: hold }).catch(() => {})
+  const question = `${by}: ${why.length > 600 ? `${why.slice(0, 599)}…` : why} 그래도 보낼까요? ${PUT_BACK}하면 입력창에 되돌립니다.`
+  const answer = await $.ui.ask(question, { options: [SEND_ANYWAY, PUT_BACK], header: '보내기 확인' }).catch(() => undefined)
+  if (answer === SEND_ANYWAY) {
+    $.clock.after(0, () => void sendAnyway($, text, reason).catch(() => {})) // a submit from inside prompt.submit would wait on this one
+    return `${by}: 확인을 받아 다시 보냅니다`
+  }
+  await $.prompt.fill({ text: answer && answer !== PUT_BACK ? answer : text, mode: 'replace' }).catch(() => {})
+  return answer ? `${by}: 보내지 않고 입력창에 되돌렸습니다` : reason
+}
+
+// So the cache hold the drop promised is asked of /keepwarm here.
+async function sendAnyway($: EngineInterface, text: string, reason: string) {
+  const sent = await $.prompt.submit({ text, asUser: true })
+  if (sent.drop !== undefined) {
+    $.ui.toast(`다시 보낸 프롬프트도 막혔습니다: ${sent.drop}`)
+    await $.prompt.fill({ text, mode: 'replace' })
     return
   }
-  await $.prompt.fill({ text: answer && answer !== PUT_BACK ? answer : text, mode: 'replace' })
+  const hold = keepwarmHold(reason)
+  if (hold && JSON.stringify(await $.command.list().catch(() => [])).includes('"keepwarm"')) await $.command.run({ command: 'keepwarm', args: hold }).catch(() => {})
 }
 
 // A tip toast, once per key a session, when alerts are on.

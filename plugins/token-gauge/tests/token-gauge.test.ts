@@ -375,9 +375,9 @@ describe('token-gauge', () => {
     expect(keepwarmHold('dropped for another reason')).toBeUndefined()
   })
 
-  for (const [choice, sent, filled] of [['다시 보내기', 1, 0], ['취소', 0, 1]] as const) {
-    test(`a prompt another hook dropped asks to send it again or put it back (${choice})`, async ($: any, on: any) => {
-      mock.clock(on, { now: NOW })
+  for (const [choice, sent, filled, shown] of [['보내기', 1, 0, 'test: 확인을 받아 다시 보냅니다'], ['취소', 0, 1, 'test: 보내지 않고 입력창에 되돌렸습니다']] as const) {
+    test(`a prompt another hook dropped is asked about before the drop shows (${choice})`, async ($: any, on: any) => {
+      const clock = mock.clock(on, { now: NOW })
       const asked: any[] = []
       const submitted: any[] = []
       const fills: any[] = []
@@ -406,10 +406,11 @@ describe('token-gauge', () => {
       })
       await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/w' })
       const r = await $.prompt.submit({ text: '이어서 해 줘', origin: { kind: 'composer' } })
-      expect(r.drop).toBe(reason)
+      expect(r.drop).toBe(shown) // the card's answer, not the hook's warning
+      await clock.advance(1) // the send waits for a timer past the hook
       for (let i = 0; i < 50 && submitted.length + fills.length === 0; i++) await new Promise(res => setTimeout(res, 1))
       expect(asked.length).toBe(1)
-      expect(asked[0].questions[0].question).toMatch(/^test 훅이 프롬프트를 막았습니다\. the prompt cache went cold .+ 그대로 다시 보낼까요\?$/)
+      expect(asked[0].questions[0].question).toMatch(/^test: the prompt cache went cold .+ 그래도 보낼까요\? 취소하면 입력창에 되돌립니다\.$/)
       expect(submitted.length).toBe(sent)
       expect(fills.length).toBe(filled)
       if (sent) expect(commands).toMatchObject([{ command: 'keepwarm', args: '3h00m' }])
