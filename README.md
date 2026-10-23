@@ -202,7 +202,7 @@ README와 Claude Code 화면에 나오는 말입니다. 공식 이름은 [Claude
 ```
 
 - 캐시가 식은 채로 보내려 하면 한 번 막고 다시 쓰는 비용을 알려 줍니다. 그대로 다시 보내면 전송됩니다. token-gauge가 이때 질문 카드를 띄우고, `다시 보내기`를 고르면 프롬프트를 보낸 뒤 cache-tax가 안내한 시간만큼 `/keepwarm`을 켭니다.
-- 질문 카드는 token-gauge의 훅이 cache-tax보다 바깥에 있을 때만 뜹니다. 같은 범위(user 등)의 mod는 `settings.json`의 `enabledPlugins`에 적힌 순서대로 바깥부터 놓이므로, `token-gauge@token-gauge`가 `cache-tax@claude-code-mods`보다 위에 있어야 합니다. 이 README 순서대로 token-gauge를 먼저 설치했다면 이미 그렇습니다.
+- 질문 카드는 token-gauge의 훅이 cache-tax보다 바깥에 있을 때만 뜹니다. 같은 범위(user 등)의 mod는 `settings.json`의 `enabledPlugins`에 적힌 순서대로 바깥부터 놓이므로, `token-gauge@token-gauge`가 `cache-tax@claude-code-mods`보다 위에 있어야 합니다. 이 README 순서대로 token-gauge를 먼저 설치했다면 이미 그렇습니다. `CLAUDE_CODE_PLUGIN_DIRS`나 `--plugin-dir`로 폴더에서 불러오면 그 목록의 순서를 따르므로, token-gauge 폴더를 cache-tax 폴더보다 앞에 적습니다. 바꾼 순서는 새 세션부터 적용됩니다. 순서가 반대면 cache-tax가 먼저 막고 끝내서 질문 카드 없이 경고만 나옵니다.
 - 캐시가 만료돼 전체를 다시 기록한 뒤에는 3시간 동안 캐시 유지를 스스로 켭니다. 50분 넘게 쉴 때마다 작은 요청(ping)으로 사용량을 조금 씁니다. 끄려면 `/keepwarm off`.
 - `claude-code-mods`라는 이름의 다른 마켓플레이스(hamzafer)를 이미 등록했다면 이름이 겹쳐 추가되지 않습니다.
 
