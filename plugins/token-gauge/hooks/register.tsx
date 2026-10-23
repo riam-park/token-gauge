@@ -328,7 +328,8 @@ export const register: Register = (on, options) => {
 
   // A prompt the person sent that another plugin's hook dropped (cache-tax on a cold cache, say): before the drop is
   // shown, a question card asks whether to send it anyway or put it back in the box. Waiting on the card does not
-  // count against the hook's time; the drop then shown is the answer's short line.
+  // count against the hook's time. Sending passes the same prompt down once more, which cache-tax lets through the
+  // second time: it enters as typed, once, with no drop shown. Otherwise the drop shown is the answer's short line.
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
     if (!orderChecked && result.drop === undefined) {
@@ -337,7 +338,16 @@ export const register: Register = (on, options) => {
     }
     if (result.drop === undefined || e.command || e.isMeta || !(await typedByPerson($, e.origin.kind))) return result
     const by = droppedBy(next.trace)
-    return by ? { drop: await askDropped($, e.text, by, result.drop) } : result
+    if (!by) return result
+    const answer = await askDropped($, e.text, by, result.drop)
+    if (typeof answer === 'string') return { drop: answer }
+    const again = await next(e)
+    if (again.drop !== undefined) {
+      await $.prompt.fill({ text: e.text, mode: 'replace' }).catch(() => {})
+      return { drop: `token-gauge: 다시 보내도 막혀 입력창에 되돌렸습니다. ${again.drop}` }
+    }
+    $.clock.after(0, () => void holdCache($, answer.hold).catch(() => {})) // past this hook: a command waits for the turn to end
+    return again
   }).catch(async ($, e, next) => next(e)) // observer only: never stands in the way of a prompt
 
   on('command.run', { command: 'effort' }, async ($, e, next) => {
@@ -568,23 +578,18 @@ async function typedByPerson($: EngineInterface, kind: string) {
   return PERSON.has(kind) || (kind === 'sdk' && (await $.session.surfaces().catch(() => [])).length > 0)
 }
 
-// The person's choice, and the line their drop shows for it. The card is headed token-gauge and names the plugin that
-// dropped the prompt, its reason in Korean when it is cache-tax's (cardText). Sending goes out as the plugin's own
-// prompt, which cache-tax lets through, once this drop has settled (a timer, past this hook). Anything else (cancel,
+// The person's choice: `{ hold }` to send, or the line their drop shows. The card is headed token-gauge and names the
+// plugin that dropped the prompt, its reason in Korean when it is cache-tax's (cardText). Anything but sending (cancel,
 // text typed under Other) goes back in the box; a card never answered (dismissed, or no surface to ask on) keeps the
 // hook's own reason.
 // With a cache hold on offer, the person picks whether to keep the cache warm as well as whether to send.
-async function askDropped($: EngineInterface, text: string, by: string, reason: string) {
+async function askDropped($: EngineInterface, text: string, by: string, reason: string): Promise<string | { hold?: string }> {
   const card = cardText(by, reason, cfg.cacheTtlMs, snap.model)
   const cost = card.cost ? `$${card.cost}` : ''
   const keep = card.hold ? `보내고 ${koDuration(card.hold)} 유지 (${[cost, card.keepUsd && `약 $${card.keepUsd}`].filter(Boolean).join(' + ') || '비용 미상'})` : undefined
   const send = card.hold ? `보내기만${cost && ` (${cost})`}` : `${SEND_ANYWAY}${cost && ` (${cost})`}`
   const answer = await $.ui.ask(card.question, { options: keep ? [keep, send, PUT_BACK] : [send, PUT_BACK], header: 'token-gauge' }).catch(() => undefined)
-  if (answer === keep || answer === send) {
-    const hold = answer === keep ? card.hold : undefined
-    $.clock.after(0, () => void sendAnyway($, text, hold).catch(() => {})) // a submit from inside prompt.submit would wait on this one
-    return `token-gauge: 보내기를 골라, ${by} 플러그인이 막았던 프롬프트를 다시 보냅니다.`
-  }
+  if (answer === keep || answer === send) return { hold: answer === keep ? card.hold : undefined }
   await $.prompt.fill({ text: answer && answer !== PUT_BACK ? answer : text, mode: 'replace' }).catch(() => {})
   return answer ? 'token-gauge: 보내지 않았습니다. 입력창에 되돌렸습니다.' : reason
 }
@@ -638,17 +643,10 @@ async function warnIfCacheTaxAbove($: EngineInterface, trace: readonly { plugin:
 
 // The hold the person chose is asked of /keepwarm; with none, `/keepwarm off`, since cache-tax holds the cache on its
 // own once a cold write is paid. Commands wait for the turn to end, so this runs after cache-tax's own.
-async function sendAnyway($: EngineInterface, text: string, hold: string | undefined) {
-  const sent = await $.prompt.submit({ text, asUser: true })
-  if (sent.drop !== undefined) {
-    $.ui.toast(`다시 보낸 프롬프트도 막혔습니다: ${sent.drop}`)
-    await $.prompt.fill({ text, mode: 'replace' })
-    return
-  }
-  if (!JSON.stringify(await $.command.list().catch(() => [])).includes('"keepwarm"')) return $.ui.toast('다시 보냈습니다')
+async function holdCache($: EngineInterface, hold: string | undefined) {
+  if (!JSON.stringify(await $.command.list().catch(() => [])).includes('"keepwarm"')) return
   const done = await $.command.run({ command: 'keepwarm', args: hold ?? 'off' }).then(() => true).catch(() => false)
-  if (!done) return $.ui.toast('다시 보냈습니다 · /keepwarm을 실행하지 못했습니다')
-  $.ui.toast(hold ? `다시 보냈습니다 · /keepwarm으로 ${koDuration(hold)} 동안 캐시를 유지합니다` : '다시 보냈습니다 · 캐시 유지는 켜지 않았습니다')
+  $.ui.toast(!done ? '/keepwarm을 실행하지 못했습니다' : hold ? `/keepwarm으로 ${koDuration(hold)} 동안 캐시를 유지합니다` : '캐시 유지는 켜지 않았습니다')
 }
 
 // A tip toast, once per key a session, when alerts are on.
