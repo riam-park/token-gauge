@@ -162,7 +162,6 @@ let timer: Timer | undefined
 let hasKeepwarm = false
 let showDetail = false
 let work: Work | undefined // the main-thread turn in progress
-const pressed = new Map<string, number>() // buttons whose command waits or runs, by main turns done at the press: a second press would queue it again
 let turnItems: Item[] = []
 let turnBase: number | undefined // the context when the main-thread turn began, for its ▲ growth
 let mine: Day = { usd: 0, input: 0, output: 0 } // this session's share of today
@@ -292,8 +291,6 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId) return result // a subagent's turn fills its own window
-    // a press from before this turn had its turn to run by now: a queued line someone removed never settles
-    for (const [key, turns] of pressed) if (turns < mainTurns) pressed.delete(key)
     work = undefined
     const sample = turnSample(steps, turnItems.reduce((a, i) => a + i.tokens, 0))
     if (sample) samples = [...samples, sample].slice(-SAMPLES)
@@ -397,10 +394,8 @@ async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, colu
         .then(() => $.ui.toast('cache-tax: 90분 동안 캐시를 유지합니다 · /keepwarm off로 취소'))
         .catch(() => $.ui.toast('cache-tax의 /keepwarm을 실행하지 못했습니다'))
     },
-    compact: () => queue($, 'compact', '/compact를 실행', () => $.command.run({ command: 'compact', args: compactArgs([...edited]) })),
-    // a memo queued behind a /compact is written from its summary
-    handoff: () =>
-      queue($, 'handoff', '인계 메모를 요청', () => $.prompt.submit({ text: handoffText(cfg.handoffDir, snap.compaction?.lost), asUser: true }), pressed.has('compact') ? ' · /compact 뒤라 요약을 보고 씁니다' : ''),
+    compact: () => fillPrompt($, `/compact ${compactArgs([...edited])}`.trim()),
+    handoff: () => fillPrompt($, handoffText(cfg.handoffDir, snap.compaction?.lost)),
     toggle: () => {
       showDetail = !showDetail
       if (showDetail) void readToday($).then(() => $.ui.invalidate('ui.render')).catch(() => {})
@@ -410,19 +405,12 @@ async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, colu
   return draw(ui, v, textBars, act, working, isYielding)
 }
 
-// A press while Claude works waits for the turn's end with nothing on screen, and a big context answers slowly:
-// say so at once, and take the press once until it runs.
-function queue($: EngineInterface, key: string, what: string, run: () => Promise<unknown>, note = '') {
-  if (pressed.has(key)) return $.ui.toast(`이미 눌렀습니다 · 차례가 되면 ${what}합니다`)
-  pressed.set(key, mainTurns)
-  $.ui.invalidate('ui.render') // the button now reads 대기 중 or 실행 중
-  $.ui.toast(work ? `작업이 끝나면 ${what}합니다${note}` : `${what}합니다 · 컨텍스트가 크면 1~2분 걸립니다${note}`)
-  run()
-    .catch(() => $.ui.toast(`${what}하지 못했습니다`))
-    .finally(() => {
-      pressed.delete(key)
-      $.ui.invalidate('ui.render')
-    })
+// A clean-up button only writes its request into the prompt box: the person sends it, edits it or clears it.
+function fillPrompt($: EngineInterface, text: string) {
+  $.prompt
+    .fill({ text, mode: 'replace' })
+    .then(r => r.isFilled || $.ui.toast('입력창에 넣지 못했습니다'))
+    .catch(() => $.ui.toast('입력창에 넣지 못했습니다'))
 }
 
 function takeLimits(rateLimits: readonly Limit[] | undefined, costUsd: number | undefined) {
@@ -872,13 +860,9 @@ function workCells(w: Work & { elapsed: number }) {
   return cells(`⏳ ${mmss(w.elapsed)} · 도구 ${w.tools}${w.agents ? ` · subagent ${w.agents} 실행 중` : ''}`) + 5
 }
 
-// The clean-up buttons: a pressed one says it waits for the turn or runs; the memo says what it costs.
+// The clean-up buttons; the memo says what it costs.
 function actionLabels(v: View) {
-  const state = work ? '대기 중' : '실행 중'
-  return {
-    compact: pressed.has('compact') ? `/compact ${state}` : '/compact',
-    handoff: pressed.has('handoff') ? `인계 메모 ${state}` : `인계 메모${v.ctx?.memoUsd ? ` ≈$${v.ctx.memoUsd}` : ''}`,
-  }
+  return { compact: '/compact', handoff: `인계 메모${v.ctx?.memoUsd ? ` ≈$${v.ctx.memoUsd}` : ''}` }
 }
 
 function width(v: View) {
