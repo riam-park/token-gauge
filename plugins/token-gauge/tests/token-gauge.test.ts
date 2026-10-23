@@ -384,6 +384,8 @@ describe('token-gauge', () => {
     expect(koDuration('3h00m')).toBe('3시간')
     expect(koDuration('5m')).toBe('5분')
     expect(koDuration('2d4h')).toBe('2일 4시간')
+    expect(koDuration('15d 17h')).toBe('15일 17시간') // cache-tax spaces its longer durations
+    expect(cardText('cache-tax', 'cache-tax: the prompt cache went cold 15d 17h ago. Sending this re-writes up to 70,146 tokens at $0.2/MTok = $0.01 (a warm turn would have cost $0.00). Send it again to pay it, and keepwarm will then hold the cache for 3h00m.', 60 * MIN)).toMatchObject({ cost: '0.01', hold: '3h00m', keepUsd: '0.00' })
     expect(koDuration('soon')).toBe('soon')
     expect(keepPings('3h00m', 60 * MIN)).toBe(3)
     expect(keepPings('45m', 60 * MIN)).toBeUndefined() // over before the first refresh

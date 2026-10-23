@@ -581,7 +581,7 @@ async function askDropped($: EngineInterface, text: string, by: string, reason: 
 // reason offers, `keepUsd` what holding it costs.
 export function cardText(by: string, reason: string, ttlMs: number) {
   const why = reason.startsWith(`${by}:`) ? reason.slice(by.length + 1).trimStart() : reason
-  const m = /went cold (\S+) ago\. Sending this re-writes up to ([\d,]+) tokens at \$([\d.]+)\/MTok = \$([\d.]+) \(a warm turn would have cost \$([\d.]+)\)/.exec(why)
+  const m = /went cold (.+?) ago\. Sending this re-writes up to ([\d,]+) tokens at \$([\d.]+)\/MTok = \$([\d.]+) \(a warm turn would have cost \$([\d.]+)\)/.exec(why)
   const hold = keepwarmHold(why)
   const pings = hold ? keepPings(hold, ttlMs) : undefined
   // a ping reads the cache once: 0.1x the input price, which a write costs 2x (1-hour cache) or 1.25x (5-minute)
@@ -604,9 +604,9 @@ export function keepPings(hold: string, ttlMs: number) {
   return Math.floor(((Number(p[1]) || 0) * 60 + (Number(p[2]) || 0)) / 50) || undefined
 }
 
-// 38h39m -> 38시간 39분, 3h00m -> 3시간, 5m -> 5분; anything else as it came.
+// 38h39m -> 38시간 39분, 3h00m -> 3시간, 15d 17h -> 15일 17시간, 5m -> 5분; anything else as it came.
 export function koDuration(d: string) {
-  const parts = /^(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?$/.exec(d)
+  const parts = /^(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?$/.exec(d.replace(/\s+/g, ''))
   if (!parts || !d) return d
   const [, days, hours, mins] = parts.map(n => Number(n) || 0)
   return [days && `${days}일`, hours && `${hours}시간`, mins && `${mins}분`].filter(Boolean).join(' ') || '0분'
