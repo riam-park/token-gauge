@@ -44,6 +44,7 @@ const SEND_ANYWAY = '보내기'
 const PUT_BACK = '취소'
 const QUESTION_LINE = 80 // the terminal's line above a question: two of its 40-column rows
 const NEXT_STEP_TOOL = 'mcp__ccd_turn__wrap_up' // the desktop app's turn-end summary; with a question it is the next-step box
+const DESKTOP_SLACK = 8 // columns the graphical surfaces' proportional font and key badge take beyond the estimate (2026-10-24 screen: it wrapped without)
 
 // The userConfig options in plugin.json, asked at install and changed with /plugin configure or /config.
 // handoffDir '' asks for the handoff memo in the answer; a folder asks for a PROMPT file there.
@@ -399,7 +400,8 @@ export const register: Register = (on, options) => {
     const rest = await next(e) // what other mods and Claude Code draw here stays
     if (e.surface === 'desktop') seenDesktop = true
     // A survey (a question in the band) keeps the chip row, without buttons or the detail panel, so the question keeps the room
-    const band = await bandTree($, $.ui.resolve(e), e.surface === 'terminal', e.props.bodyColumns - 2, e.props.isWorking ? 'working' : 'idle', e.props.hasSurvey)
+    const columns = e.props.bodyColumns - 2 - (e.surface === 'terminal' ? 0 : DESKTOP_SLACK)
+    const band = await bandTree($, $.ui.resolve(e), e.surface === 'terminal', columns, e.props.isWorking ? 'working' : 'idle', e.props.hasSurvey)
     if (!band) return rest
     return { type: 'Box', props: { flexDirection: 'column' }, children: rest ? [band, rest] : [band] }
   })
@@ -410,7 +412,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AskUserQuestion' }, async ($, e, next) => {
     const rest = await next(e)
     if (!rest) return rest // the engine's node stands once, nothing below it
-    const columns = (e.viewport?.columns ?? QUESTION_COLUMNS) - 2
+    const columns = (e.viewport?.columns ?? QUESTION_COLUMNS) - 2 - DESKTOP_SLACK // the terminal draws questionLine instead
     const ui = $.ui.resolve(e)
     const band = e.surface === 'terminal' ? questionLine(ui, fit(view(snap, await $.clock.now(), false), QUESTION_LINE)) : await bandTree($, ui, true, columns, 'question', true)
     if (!band) return rest
@@ -983,7 +985,7 @@ function width(v: View) {
   // the bars between chips for text's brackets, padding, the bars drawn wider than their two glyphs, the ▾ button
   // and the clean-up buttons with their gaps
   const a = actionLabels(v)
-  return [...text(v)].length + 16 + (v.ctx?.offerActions ? cells(a.compact) + cells(a.handoff) + 4 : 0)
+  return cells(text(v)) + 16 + (v.ctx?.offerActions ? cells(a.compact) + cells(a.handoff) + 4 : 0)
 }
 
 type Actions = { keepWarm: () => void; compact: () => void; handoff: () => void; toggle: () => void }

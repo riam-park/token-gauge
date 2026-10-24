@@ -376,6 +376,17 @@ describe('token-gauge', () => {
     await ui.unmount()
   })
 
+  // 2026-10-24 screen: the desktop's proportional font and key badge wrapped a row the estimate said fit
+  test('the desktop folds sooner than the terminal at the same width', async ($: any, on: any) => {
+    engine(on)
+    await $.session.start({ surface: 'desktop', isInteractive: false, cwd: '/w' })
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ plugin: 'token-gauge', surface, component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 92 } })
+      expect(Boolean(await ui.find({ type: 'Text', text: '$1.27' }))).toBe(surface === 'terminal')
+      await ui.unmount()
+    }
+  })
+
   // under about 80 columns not even the folded chips fit: the band turns into one line of text, as above a question
   test('a band too narrow for the chips is one line of text', async ($: any, on: any) => {
     engine(on)
