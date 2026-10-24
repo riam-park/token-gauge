@@ -918,25 +918,20 @@ const EMOJI: Record<string, string> = { '☀': '☀️', '☁': '☁️', '☂':
 // A chip the band draws yellow or red, called out where the footer has no colors.
 const warn = (color: string) => (color === C.yellow || color === C.red ? ' ⚠️' : '')
 
-// The band as text, for the footer under the prompt, which draws text alone (ANSI codes show as text there): the
-// chips split by a bar, their bars as ▰▱, the icons in color, ⚠️ where the band goes yellow or red, the model left
-// out (the footer shows it beside).
-//   plan 5h 23% ▰▱▱▱▱▱ ↻1h42 · 7d 83% ⚠️ ↻19h52 · $0.81  │  ☀️ context ▰▱▱▱▱▱▱▱ 111k / 1M 11%  │  ❄️ 51:20  │  ⏳ 0:06 · 도구 0
+// The band as text, for the footer under the prompt, which draws text alone (ANSI codes show as text there) and is
+// cut to about 27 characters on the desktop (2026-10-24 screen): what matters first, short, so a cut keeps the
+// context and the cache. The icons in color, ⚠️ where the band goes yellow or red; bars, resets, the cost and the
+// model (the footer shows it beside) are left out.
+//   ☀️ 11% · ❄️ 51:20 · 5h 23% · 7d 83% ⚠️ · ⏳ 0:06 · subagent 1
 export function footerLine(v: View, working?: Work & { elapsed: number }) {
-  const chips: string[] = []
-  const p = v.plan
-  if (p) {
-    const parts: string[] = []
-    if (p.five) parts.push(`5h ${p.five.percent}%${warn(p.five.color)} ${textBar(p.five.bar.percent, 6)}${p.five.reset ? ` ↻${p.five.reset}` : ''}`)
-    if (p.seven) parts.push(`7d ${p.seven.percent}%${warn(p.seven.color)}${p.seven.reset ? ` ↻${p.seven.reset}` : ''}`)
-    if (p.cost) parts.push(p.cost)
-    chips.push(`plan ${parts.join(' · ')}`)
-  }
-  if (v.ctx) chips.push([`${EMOJI[v.ctx.icon] ?? v.ctx.icon} context ${textBar(v.ctx.bar.percent, 8)} ${v.ctx.used} / ${v.ctx.window} ${v.ctx.percent}%`, v.ctx.delta, v.ctx.turns].filter(Boolean).join(' · '))
-  if (v.cache) chips.push([`❄️ ${v.cache.text}${warn(v.cache.color)}`, v.cache.rewrite].filter(Boolean).join(' '))
-  if (working) chips.push(`⏳ ${mmss(working.elapsed)} · 도구 ${working.tools}`)
-  if (v.agents) chips.push(`subagent ${v.agents} 실행 중`)
-  return chips.join('  │  ') || undefined
+  const parts: string[] = []
+  if (v.ctx) parts.push(`${EMOJI[v.ctx.icon] ?? v.ctx.icon} ${v.ctx.percent}%`)
+  if (v.cache) parts.push(`❄️ ${v.cache.text}${warn(v.cache.color)}`)
+  if (v.plan?.five) parts.push(`5h ${v.plan.five.percent}%${warn(v.plan.five.color)}`)
+  if (v.plan?.seven) parts.push(`7d ${v.plan.seven.percent}%${warn(v.plan.seven.color)}`)
+  if (working) parts.push(`⏳ ${mmss(working.elapsed)}`)
+  if (v.agents) parts.push(`subagent ${v.agents}`)
+  return parts.join(' · ') || undefined
 }
 
 // The footer line, on the desktop while a next-step box hides the band, the only time the band is gone that a plugin
