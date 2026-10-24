@@ -57,13 +57,6 @@ describe('token-gauge', () => {
     expect(view(calm, NOW, true).slices.map(x => x.color)).toEqual(['#6AA9F0', '#F59E4B']) // messages keep their own color
   })
 
-  test('plan chip takes its color from 7d alone', () => {
-    const s = { ...calm, limits: [{ ...calm.limits[0]!, percentUsed: 93 }, calm.limits[1]!] }
-    const v = view(s, NOW, false)
-    expect(v.plan?.color).toBe('#6CC88A')
-    expect(v.plan?.five?.color).toBe('#EF5F5F')
-  })
-
   test('warning: violet forecast, keep button under 10 minutes', () => {
     const s: Snapshot = { ...calm, tokens: 660_000, deltas: [24_000], lastRequestAt: NOW - 52 * MIN }
     const v = view(s, NOW, true)
@@ -83,8 +76,8 @@ describe('token-gauge', () => {
   test('narrow: drops extras, then cost, then 7d', () => {
     const v = view(calm, NOW, false)
     expect(text(fit(v, 200))).toBe(text(v))
-    expect(text(fit(v, 114))).toBe('[plan 5h 5% ▰▱ ↻2h52 · 7d 38% ↻3d0h · $1.27]  [☀ context ▰▱ 113k / 1M 11%]  [❄ 59:06]')
-    expect(text(fit(v, 93))).toBe('[plan 5h 5% ▰▱ ↻2h52]  [☀ context ▰▱ 113k / 1M 11%]  [❄ 59:06]')
+    expect(text(fit(v, 106))).toBe('[plan 5h 5% ▰▱ ↻2h52 · 7d 38% ↻3d0h · $1.27]  [☀ context ▰▱ 113k / 1M 11%]  [❄ 59:06]')
+    expect(text(fit(v, 85))).toBe('[plan 5h 5% ▰▱ ↻2h52]  [☀ context ▰▱ 113k / 1M 11%]  [❄ 59:06]')
   })
 
   for (const [surface, hasSurvey] of [['terminal', false], ['desktop', false], ['desktop', true]] as const) {
@@ -119,7 +112,7 @@ describe('token-gauge', () => {
       expect(await ui.find({ type: 'Text', text: '☀' })).toBeDefined() // the chips stay, a survey or not
       expect(await ui.find({ type: 'Text', text: /engine band/ })).toBeDefined() // stacked, not replaced
       expect(Boolean(await ui.find({ type: 'Svg' }))).toBe(surface === 'desktop')
-      expect(Boolean(await ui.find({ type: 'Text', text: '│' }))).toBe(surface === 'desktop') // 2026-10-24: no borders there, one row high
+      expect(await ui.find({ type: 'Text', text: '│' })).toBeDefined() // no borders, one row high: the desktop since 1.7.0, the terminal since 1.8.0
       expect(Boolean(await ui.find({ type: 'Button', text: '▾ 상세' }))).toBe(!hasSurvey) // a survey keeps the row free of buttons
       expect(await ui.find({ type: 'Text', text: /^리셋/ })).toBeUndefined() // closed until pressed
       await ui.unmount()
@@ -295,7 +288,7 @@ describe('token-gauge', () => {
     const v = view({ ...calm, model: 'claude-opus-5-5', effort: 'high' }, NOW, false)
     expect(v.model).toEqual({ name: 'Opus 5.5', effort: 'high', color: '#A78BFA' })
     expect(text(v)).toMatch(/  \[Opus 5\.5 · high\]$/)
-    expect(text(fit(v, 114))).toBe('[plan 5h 5% ▰▱ ↻2h52 · 7d 38% ↻3d0h · $1.27]  [☀ context ▰▱ 113k / 1M 11%]  [❄ 59:06]')
+    expect(text(fit(v, 106))).toBe('[plan 5h 5% ▰▱ ↻2h52 · 7d 38% ↻3d0h · $1.27]  [☀ context ▰▱ 113k / 1M 11%]  [❄ 59:06]')
     expect(view({ ...calm, model: 'x' }, NOW, false).model?.color).toBe('#9A9A9A')
   })
 
@@ -343,7 +336,7 @@ describe('token-gauge', () => {
     engine(on)
     on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
     await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
-    const band = (isWorking: boolean) => $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking, maxRows: 10, bodyColumns: 104 } })
+    const band = (isWorking: boolean) => $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking, maxRows: 10, bodyColumns: 94 } })
     let ui = await band(false)
     expect(await ui.find({ type: 'Text', text: '$1.27' })).toBeDefined() // idle: the whole line fits
     await ui.unmount()
@@ -355,18 +348,41 @@ describe('token-gauge', () => {
     await ui.unmount()
   })
 
-  // under about 90 columns not even the folded chips fit: the band turns into one line of text, as above a question
+  // 2026-10-24: a subagent left running in the background after its turn keeps a chip until it ends
+  test('subagents still running show a chip, a turn or not', async ($: any, on: any) => {
+    const clock = mock.clock(on, { now: NOW })
+    on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+    on('session.usage', () => ({ value: { startedAt: NOW, context: { tokens: 113_000, window: 1_000_000 }, rateLimits: calm.limits } }))
+    on('ui.render', ($$: any, e: any) => $$.ui.resolve(e).Text({ children: `engine ${e.component}` }))
+    let status = 'running'
+    on('agent.list', () => ({ value: [{ id: 'a1', description: 'scan', type: 'Explore', status }, { id: 'a2', description: 'old', type: 'Explore', status: 'completed' }] }))
+    await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
+    await clock.advance(2000)
+    await settle()
+    let ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+    expect(await ui.find({ type: 'Text', text: 'subagent' })).toBeDefined() // idle, no turn: the background one still counts
+    expect(await ui.find({ type: 'Text', text: '1' })).toBeDefined() // the completed one does not
+    await ui.unmount()
+    status = 'completed'
+    await clock.advance(2000)
+    await settle()
+    ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+    expect(await ui.find({ type: 'Text', text: 'subagent' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  // under about 80 columns not even the folded chips fit: the band turns into one line of text, as above a question
   test('a band too narrow for the chips is one line of text', async ($: any, on: any) => {
     engine(on)
     on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
     await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
     const band = (isWorking: boolean, bodyColumns: number) => $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking, maxRows: 10, bodyColumns } })
-    let ui = await band(false, 70)
+    let ui = await band(false, 60)
     expect(await ui.find({ type: 'Text', text: /113k\/1M/ })).toBeDefined()
     expect(await ui.find({ type: 'Button' })).toBeUndefined() // no chips, no buttons
     await ui.unmount()
     await $.turn.start({ text: 'go', turnId: 't1' })
-    ui = await band(true, 70)
+    ui = await band(true, 60)
     expect(await ui.find({ type: 'Text', text: '⏳ ' })).toBeDefined()
     await ui.unmount()
     ui = await band(false, 160)
@@ -610,7 +626,7 @@ describe('token-gauge', () => {
     const busy: Snapshot = { ...calm, limits, tokens: 800_000, lastRequestAt: NOW - 55 * MIN }
     expect(footerLine(view(busy, NOW, false))).toMatch(/^plan 5h 80% ⚠\uFE0F ▰▰▰▰▰▱ ↻2h52 · 7d 95% ⚠\uFE0F ↻3d0h · \$1\.27 {2}│ {2}⛈\uFE0F context [▰▱]{8} 800k \/ 1M 80% · ▲1\.3k · ≈ \d+턴 {2}│ {2}❄\uFE0F 5:00 ⚠\uFE0F$/) // yellow and red called out
     expect(footerLine(view({ ...busy, lastRequestAt: NOW - 2 * 60 * MIN }, NOW, false))).toMatch(/ {2}│ {2}❄\uFE0F cold ⚠\uFE0F 재기록 ~800k$/)
-    expect(footerLine(view(calm, NOW, false), { since: 0, elapsed: 7_000, tools: 1, agents: 1 })).toMatch(/ {2}│ {2}⏳ 0:07 · 도구 1 · subagent 1 실행 중$/) // while Claude works
+    expect(footerLine(view({ ...calm, agents: 1 }, NOW, false), { since: 0, elapsed: 7_000, tools: 1 })).toMatch(/ {2}│ {2}⏳ 0:07 · 도구 1 {2}│ {2}subagent 1 실행 중$/) // while Claude works
     expect(footerLine(view({ ...calm, limits: [], costUsd: undefined, tokens: undefined, lastRequestAt: undefined }, NOW, false))).toBeUndefined()
   })
 

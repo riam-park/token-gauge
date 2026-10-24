@@ -3,7 +3,8 @@
 // Colors follow state as token-weather's forecast does; ▾ (or d with the band focused) opens a detail panel:
 // reset forecasts, today's total over every session, /context's breakdown, the last turn's largest results,
 // unchanged re-reads and repeated outputs, what a compaction dropped and the cache hit rate. A fourth chip
-// shows the model and its effort. While Claude works a ⏳ chip shows the time, tool calls and running subagents.
+// shows the model and its effort. While Claude works a ⏳ chip shows the time and tool calls; subagents still
+// running, the turn's or ones left in the background after it, have a chip of their own.
 // Estimates (≈) are characters / 4, scaled by k: the input growth measured between a turn's requests over
 // the estimated tool results that caused it.
 import type { EngineInterface, Register, Timer } from 'claude-code'
@@ -131,11 +132,11 @@ export type Snapshot = {
   compaction?: Compaction // the last one this session
   model?: string
   effort?: string | number
+  agents?: number // subagents running now, with or without a turn
 }
 type Bar = { percent: number; color: string; marker?: number }
 export type View = {
   plan?: {
-    color: string
     five?: { percent: number; color: string; bar: Bar; reset?: string }
     seven?: { percent: number; color: string; reset?: string }
     cost?: string
@@ -145,8 +146,9 @@ export type View = {
   detail: { label: string; text: string }[]
   slices: { name: string; tokens: number; color: string; share: number }[]
   model?: { name: string; effort?: string; color: string }
+  agents?: number
 }
-type Work = { since: number; tools: number; agents: number }
+type Work = { since: number; tools: number }
 // A main-thread turn's requests: the first and last input, every output and the last one.
 type Steps = { first?: number; last?: number; outputs: number; lastOutput: number; count: number; compacted: boolean }
 export type Sample = { growth: number; est: number }
@@ -213,9 +215,13 @@ export const register: Register = (on, options) => {
       $.clock
         .now()
         .then(async now => {
-          if (work && tick % 2 === 0) {
-            const agents = await $.agent.list().catch(() => [])
-            work = work && { ...work, agents: agents.filter(a => a.status === 'running').length }
+          // a subagent can outlive the turn that started it: counted every other second, a turn or not
+          if (tick % 2 === 0) {
+            const agents = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running').length
+            if (agents !== (snap.agents ?? 0)) {
+              snap = { ...snap, agents }
+              $.ui.invalidate('ui.render')
+            }
           }
           // while Claude works the context grows request by request and result by result: read it again
           if (work && tick % REFRESH_TICKS === 0) await readContext($, false).catch(() => {})
@@ -248,7 +254,7 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     if (!e.agentId) {
       turnCard = false // answered or passed over: a new turn closes the box
-      work = { since: await $.clock.now(), tools: 0, agents: 0 }
+      work = { since: await $.clock.now(), tools: 0 }
       turnItems = []
       turnBase = snap.tokens
       steps = noSteps()
@@ -382,7 +388,7 @@ export const register: Register = (on, options) => {
     const rest = await next(e) // what other mods and Claude Code draw here stays
     if (e.surface === 'desktop') seenDesktop = true
     // A survey (a question in the band) keeps the chip row, without buttons or the detail panel, so the question keeps the room
-    const band = await bandTree($, $.ui.resolve(e), e.surface === 'terminal', e.surface !== 'terminal', e.props.bodyColumns - 2, e.props.isWorking ? 'working' : 'idle', e.props.hasSurvey)
+    const band = await bandTree($, $.ui.resolve(e), e.surface === 'terminal', e.props.bodyColumns - 2, e.props.isWorking ? 'working' : 'idle', e.props.hasSurvey)
     if (!band) return rest
     return { type: 'Box', props: { flexDirection: 'column' }, children: rest ? [band, rest] : [band] }
   })
@@ -395,22 +401,21 @@ export const register: Register = (on, options) => {
     if (!rest) return rest // the engine's node stands once, nothing below it
     const columns = (e.viewport?.columns ?? QUESTION_COLUMNS) - 2
     const ui = $.ui.resolve(e)
-    const band = e.surface === 'terminal' ? questionLine(ui, fit(view(snap, await $.clock.now(), false), QUESTION_LINE)) : await bandTree($, ui, true, true, columns, 'question', true)
+    const band = e.surface === 'terminal' ? questionLine(ui, fit(view(snap, await $.clock.now(), false), QUESTION_LINE)) : await bandTree($, ui, true, columns, 'question', true)
     if (!band) return rest
     return { type: 'Box', props: { flexDirection: 'column' }, children: [band, rest] }
   }).catch(async ($, e, next) => next(e)) // never in the way of a question
 }
 
 // The chip row (and the detail panel when open) for one site; undefined with nothing to show yet.
-// `flat`: the graphical surfaces' band, the line under the prompt as it reads there, whole (it wraps when narrow).
-async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, flat: boolean, columns: number, state: 'idle' | 'working' | 'question', isYielding: boolean) {
+async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, columns: number, state: 'idle' | 'working' | 'question', isYielding: boolean) {
   const now = await $.clock.now()
   const working = state === 'working' && work ? { ...work, elapsed: now - work.since } : undefined
   const room = columns - (working ? workCells(working) : 0)
   const v = fit(view(snap, now, hasKeepwarm), room)
   if (!v.plan && !v.ctx && !v.cache) return undefined
   if (width(v) > room) return questionLine(ui, v, working) // too narrow for the chips even folded: one line of text, as above a question
-  return draw(ui, v, textBars, flat, actions($), working, isYielding)
+  return draw(ui, v, textBars, actions($), working, isYielding)
 }
 
 function actions($: EngineInterface): Actions {
@@ -690,7 +695,7 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
   const seven = live('seven_day')
   const cost = cfg.showCost && s.costUsd ? `$${s.costUsd.toFixed(2)}` : undefined
   if (five || seven || cost) {
-    v.plan = { color: seven ? levelColor(seven.w.percentUsed) : C.green, cost }
+    v.plan = { cost }
     if (five) {
       const p = five.w.percentUsed
       v.plan.five = {
@@ -767,6 +772,7 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
     const name = modelName(s.model)
     v.model = { name, effort: s.effort === undefined ? undefined : String(s.effort), color: FAMILY[name.split(' ')[0]!.toLowerCase()] ?? C.marker }
   }
+  if (s.agents) v.agents = s.agents
   if (s.lastRequestAt !== undefined) {
     const expires = s.lastRequestAt + cfg.cacheTtlMs
     const left = expires - now
@@ -863,6 +869,7 @@ export function text(v: View): string {
     chips.push(`[❄ ${k.text}${k.rewrite ? ` ${k.rewrite}` : ''}${k.offerKeep ? ' (유지 90분)' : ''}]`)
   }
   if (v.model) chips.push(`[${v.model.name}${v.model.effort ? ` · ${v.model.effort}` : ''}]`)
+  if (v.agents) chips.push(`[subagent ${v.agents} 실행 중]`)
   return chips.join('  ')
 }
 
@@ -887,7 +894,8 @@ export function footerLine(v: View, working?: Work & { elapsed: number }) {
   }
   if (v.ctx) chips.push([`${EMOJI[v.ctx.icon] ?? v.ctx.icon} context ${textBar(v.ctx.bar.percent, 8)} ${v.ctx.used} / ${v.ctx.window} ${v.ctx.percent}%`, v.ctx.delta, v.ctx.turns].filter(Boolean).join(' · '))
   if (v.cache) chips.push([`❄️ ${v.cache.text}${warn(v.cache.color)}`, v.cache.rewrite].filter(Boolean).join(' '))
-  if (working) chips.push(`⏳ ${mmss(working.elapsed)} · 도구 ${working.tools}${working.agents ? ` · subagent ${working.agents} 실행 중` : ''}`)
+  if (working) chips.push(`⏳ ${mmss(working.elapsed)} · 도구 ${working.tools}`)
+  if (v.agents) chips.push(`subagent ${v.agents} 실행 중`)
   return chips.join('  │  ') || undefined
 }
 
@@ -923,9 +931,9 @@ function suggestKeep($: EngineInterface, now: number) {
 // Cells a text takes: a Hangul syllable or ⏳ two.
 const cells = (t: string) => [...t].reduce((n, c) => n + (/[가-힣⏳]/.test(c) ? 2 : 1), 0)
 
-// The ⏳ chip's cells, so the line leaves it room: its text, border, padding and the gap.
+// The ⏳ chip's cells, so the line leaves it room: its text and the bar with a gap on each side before it.
 function workCells(w: Work & { elapsed: number }) {
-  return cells(`⏳ ${mmss(w.elapsed)} · 도구 ${w.tools}${w.agents ? ` · subagent ${w.agents} 실행 중` : ''}`) + 5
+  return cells(`⏳ ${mmss(w.elapsed)} · 도구 ${w.tools}`) + 3
 }
 
 // The clean-up buttons; the memo says what it costs.
@@ -934,17 +942,18 @@ function actionLabels(v: View) {
 }
 
 function width(v: View) {
-  // borders, padding, the bars drawn wider than their two glyphs, the ▾ button and the clean-up buttons with their gaps
+  // the bars between chips for text's brackets, padding, the bars drawn wider than their two glyphs, the ▾ button
+  // and the clean-up buttons with their gaps
   const a = actionLabels(v)
-  return [...text(v)].length + 24 + (v.ctx?.offerActions ? cells(a.compact) + cells(a.handoff) + 4 : 0)
+  return [...text(v)].length + 16 + (v.ctx?.offerActions ? cells(a.compact) + cells(a.handoff) + 4 : 0)
 }
 
 type Actions = { keepWarm: () => void; compact: () => void; handoff: () => void; toggle: () => void }
 
-function draw(ui: any, v: View, isTerminal: boolean, flat: boolean, act: Actions, working: (Work & { elapsed: number }) | undefined, isYielding: boolean) {
+function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working: (Work & { elapsed: number }) | undefined, isYielding: boolean) {
   const { Box, Text, Button } = ui
   const keep = v.cache?.offerKeep && !isYielding ? <Button key="token-gauge-keep" label="유지 90분" onPress={act.keepWarm} /> : undefined
-  const row = chipRow(ui, v, isTerminal, flat, keep, working)
+  const row = chipRow(ui, v, isTerminal, keep, working)
   if (v.ctx?.offerActions && !working && !isYielding) {
     const a = actionLabels(v)
     row.push(<Button key="token-gauge-compact" label={a.compact} onPress={act.compact} />)
@@ -971,9 +980,8 @@ function draw(ui: any, v: View, isTerminal: boolean, flat: boolean, act: Actions
   )
 }
 
-// The chips, each in a border of its color, or with no border split by a dim bar (`flat`: one row high, the
-// graphical surfaces); `keep` sits in the cache chip.
-function chipRow(ui: any, v: View, isTerminal: boolean, flat: boolean, keep: unknown, working: (Work & { elapsed: number }) | undefined) {
+// The chips in one row, split by a dim bar, with no borders; `keep` sits in the cache chip.
+function chipRow(ui: any, v: View, isTerminal: boolean, keep: unknown, working: (Work & { elapsed: number }) | undefined) {
   const { Box, Text, Svg } = ui
   const dim = (s: string) => <Text dimColor>{s}</Text>
   const num = (s: string, color?: string) => (
@@ -987,16 +995,11 @@ function chipRow(ui: any, v: View, isTerminal: boolean, flat: boolean, keep: unk
     ) : (
       <Svg source={svgBar(b, cells * 8)} alt={`${Math.round(b.percent)}%`} width={cells * 8} height={8} />
     )
-  const chip = (key: string, color: string, kids: unknown[]) =>
-    flat ? (
-      <Box key={key} flexDirection="row" alignItems="center" gap={1}>
-        {kids}
-      </Box>
-    ) : (
-      <Box key={key} flexDirection="row" alignItems="center" gap={1} paddingX={1} borderStyle="round" borderColor={color}>
-        {kids}
-      </Box>
-    )
+  const chip = (key: string, kids: unknown[]) => (
+    <Box key={key} flexDirection="row" alignItems="center" gap={1}>
+      {kids}
+    </Box>
+  )
   const chips: unknown[] = []
   if (v.plan) {
     const p = v.plan
@@ -1010,32 +1013,29 @@ function chipRow(ui: any, v: View, isTerminal: boolean, flat: boolean, keep: unk
       if (p.seven.reset) kids.push(dim(`↻${p.seven.reset}`))
     }
     if (p.cost) kids.push(dim('·'), num(p.cost))
-    chips.push(chip('token-gauge-plan', p.color, kids))
+    chips.push(chip('token-gauge-plan', kids))
   }
   if (v.ctx) {
     const c = v.ctx
     const kids: unknown[] = [<Text color={c.color}>{c.icon}</Text>, dim('context'), bar(c.bar, 8), num(`${c.used} / ${c.window}`), num(`${c.percent}%`, c.color)]
     for (const extra of [c.delta, c.turns]) if (extra) kids.push(dim(`· ${extra}`))
-    chips.push(chip('token-gauge-ctx', c.color, kids))
+    chips.push(chip('token-gauge-ctx', kids))
   }
   if (v.cache) {
     const k = v.cache
     const kids: unknown[] = [<Text color={k.color}>❄</Text>, num(k.text, k.isCold ? k.color : undefined)]
     if (k.rewrite) kids.push(dim(k.rewrite))
     if (keep) kids.push(keep)
-    chips.push(chip('token-gauge-cache', k.color, kids))
+    chips.push(chip('token-gauge-cache', kids))
   }
   if (v.model) {
     const kids: unknown[] = [<Text>{v.model.name}</Text>]
     if (v.model.effort) kids.push(dim(`· ${v.model.effort}`))
-    chips.push(chip('token-gauge-model', v.model.color, kids))
+    chips.push(chip('token-gauge-model', kids))
   }
-  if (working) {
-    const kids: unknown[] = [<Text color={C.yellow}>⏳</Text>, num(mmss(working.elapsed)), dim(`· 도구 ${working.tools}`)]
-    if (working.agents) kids.push(dim(`· subagent ${working.agents} 실행 중`))
-    chips.push(chip('token-gauge-work', C.yellow, kids))
-  }
-  return flat ? chips.flatMap((c, i) => (i ? [<Text key={`token-gauge-bar-${i}`} dimColor>│</Text>, c] : [c])) : chips
+  if (working) chips.push(chip('token-gauge-work', [<Text color={C.yellow}>⏳</Text>, num(mmss(working.elapsed)), dim(`· 도구 ${working.tools}`)]))
+  if (v.agents) chips.push(chip('token-gauge-agents', [dim('subagent'), num(String(v.agents), C.cyan), dim('실행 중')]))
+  return chips.flatMap((c, i) => (i ? [<Text key={`token-gauge-bar-${i}`} dimColor>│</Text>, c] : [c]))
 }
 
 // The detail panel's lines in a column of labels, the context breakdown under its line.
@@ -1121,6 +1121,11 @@ function questionLine(ui: any, v: View, working?: Work & { elapsed: number }) {
     gap()
     num('⏳ ', C.yellow)
     num(mmss(working.elapsed))
+  }
+  if (v.agents) {
+    gap()
+    dim('subagent ')
+    num(String(v.agents), C.cyan)
   }
   return parts.length ? <Text>{parts}</Text> : undefined
 }
