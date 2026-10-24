@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { advice, calibrate, cardText, compactArgs, configure, keepPings, droppedBy, estimate, fit, fnv, footerLine, forecastText, handoffText, keepSuggestionDue, hitRate, isNewer, itemLabel, keepwarmHold, koDuration, largest, latestVersion, lostFiles, memoUsd, modelName, pace, pdfPages, readKind, redact, rewriteUsd, slices, stackCells, sumDays, svgBar, text, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
+import { advice, calibrate, cardText, compactArgs, configure, keepPings, droppedBy, estimate, fit, fnv, footerLine, forecastText, handoffText, keepSuggestionDue, hitRate, isNewer, itemLabel, keepwarmHold, koDuration, largest, latestVersion, lostFiles, memoUsd, modelName, pace, pdfPages, readKind, recentForecast, redact, rewriteUsd, savedUsd, slices, stackCells, sumDays, svgBar, text, toolKey, trail, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
 import type { Snapshot } from '../hooks/register'
 
 const NOW = Date.parse('2026-10-22T00:00:00Z')
@@ -243,6 +243,7 @@ describe('token-gauge', () => {
     expect(lost).toEqual(['C:\\w\\b.py'])
     expect(detail({ ...calm, compaction: { before: 312_000, after: 41_000, lost } }, 'compact')).toBe('312k → 41k · 요약에 빠진 편집 파일 1개: b.py')
     expect(detail({ ...calm, compaction: { lost: [] } }, 'compact')).toBe('완료')
+    expect(detail({ ...calm, compaction: { before: 312_000, after: 41_000, lost: [], count: 2 } }, 'compact')).toBe('2회 · 312k → 41k') // 2026-10-24
     expect(handoffText('', lost)).toMatch(/compact 요약에 빠진 편집 파일도 메모에 넣어 줘: C:\\w\\b\.py$/)
     expect(handoffText('')).not.toContain('compact')
   })
@@ -315,6 +316,7 @@ describe('token-gauge', () => {
     expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
     await ui.press({ key: 'token-gauge-more' })
     expect(await ui.find({ type: 'Text', text: /^변경 없는 재읽기 1회 ≈\d+ \(a\.ts 1회\) · 같은 출력 1회 ≈10k \(Bash make log\)$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Bash ≈20k · Read ≈\d+ · 세션 합계 ≈20k$/ })).toBeDefined() // 2026-10-24: the session's results by tool
     expect(shown.filter(t => t.startsWith('긴 명령 출력: Bash make log')).length).toBe(1)
     await ui.unmount()
   })
@@ -362,6 +364,9 @@ describe('token-gauge', () => {
     let ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: BAND })
     expect(await ui.find({ type: 'Text', text: 'subagent' })).toBeDefined() // idle, no turn: the background one still counts
     expect(await ui.find({ type: 'Text', text: '1' })).toBeDefined() // the completed one does not
+    await ui.press({ key: 'token-gauge-more' })
+    expect(await ui.find({ type: 'Text', text: /^Explore scan 0:0\d$/ })).toBeDefined() // the panel names it, with the time since it was first seen
+    await ui.press({ key: 'token-gauge-more' })
     await ui.unmount()
     status = 'completed'
     await clock.advance(2000)
@@ -616,6 +621,59 @@ describe('token-gauge', () => {
     await ui.unmount()
   })
 
+  // 2026-10-24: ccgauge ranks tools by context footprint, ccgauge/burnie show cache savings, the usage monitors forecast at the recent pace
+  test('per-tool results, cache savings, the pace of the last hour', () => {
+    expect(toolKey('mcp__rea__open_binary')).toBe('mcp__rea')
+    expect(toolKey('Read')).toBe('Read')
+    const tools = { Read: 120_000, Bash: 40_000, Agent: 18_000, mcp__rea: 9000, Grep: 300 }
+    expect(detail({ ...calm, tools }, '도구별')).toBe('Read ≈120k · Bash ≈40k · Agent ≈18k · mcp__rea ≈9k 외 1종 · 세션 합계 ≈187k')
+    expect(detail({ ...calm, tools: { Read: 400 } }, '도구별')).toBeUndefined() // too little to say anything
+    expect(Math.round(savedUsd('claude-opus-5-5', 1_000_000)! * 100)).toBe(380) // $4 input - $0.20 read, per million
+    expect(savedUsd(undefined, 1_000_000)).toBeUndefined()
+    const cache = { read: 2_000_000, total: 2_100_000, rewrites: 1, steps: 9 }
+    expect(detail({ ...calm, model: 'claude-opus-5-5', cache }, '캐시')).toMatch(/ · 적중률 95% · 재기록 1회 · 절약 ≈\$7\.60$/)
+    expect(detail({ ...calm, model: 'claude-opus-5-5' }, '캐시')).not.toContain('절약') // under a cent
+    // readings: on each change and every 5 minutes, an hour kept, a drop starts over
+    let t = trail([], 10, NOW)
+    t = trail(t, 10, NOW + MIN)
+    expect(t).toEqual([{ at: NOW, percent: 10 }])
+    t = trail(t, 12, NOW + 2 * MIN)
+    expect(t.length).toBe(2)
+    expect(trail(t, 3, NOW + 3 * MIN)).toEqual([{ at: NOW + 3 * MIN, percent: 3 }])
+    expect(trail([{ at: NOW - 70 * MIN, percent: 1 }], 1, NOW)).toEqual([{ at: NOW, percent: 1 }])
+    const reset = NOW + 3 * 60 * MIN
+    expect(recentForecast([{ at: NOW - 60 * MIN, percent: 20 }, { at: NOW, percent: 50 }], NOW, reset)).toMatch(/^ · 최근 1시간 속도면 .+에 100%$/) // 30 points an hour: full in 1h40, before the reset
+    expect(recentForecast([{ at: NOW - 60 * MIN, percent: 20 }, { at: NOW, percent: 25 }], NOW, reset)).toBe(' · 최근 1시간 속도면 리셋 때 ~40%')
+    expect(recentForecast([{ at: NOW - 5 * MIN, percent: 20 }, { at: NOW, percent: 30 }], NOW, reset)).toBe('') // under 10 minutes of readings
+    expect(recentForecast([{ at: NOW - 30 * MIN, percent: 20 }, { at: NOW, percent: 20 }], NOW, reset)).toBe('') // no growth
+  })
+
+  // 2026-10-24: the context chip kept the size from before /compact until the next answer
+  test('a compaction shows its size at once, then the window as the engine has it', async ($: any, on: any) => {
+    const clock = mock.clock(on, { now: NOW })
+    on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+    let usage: any = { tokens: 800_000, window: 1_000_000 }
+    on('session.usage', () => ({ value: { startedAt: NOW, context: usage, rateLimits: calm.limits } }))
+    const summary = [{ role: 'user', text: '요약', toolUses: [] }]
+    on('session.compact', () => ({ messages: summary, tokensBefore: 800_000, tokensAfter: 40_000 }))
+    on('ui.render', ($$: any, e: any) => $$.ui.resolve(e).Text({ children: `engine ${e.component}` }))
+    await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
+    await $.session.compact({ trigger: 'manual', messages: summary }) // usage still reads the request before it
+    let ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+    expect(await ui.find({ type: 'Text', text: '40k / 1M' })).toBeDefined()
+    await ui.press({ key: 'token-gauge-more' })
+    expect(await ui.find({ type: 'Text', text: '1회 · 800k → 40k' })).toBeDefined()
+    await ui.press({ key: 'token-gauge-more' })
+    await ui.unmount()
+    // the engine took it: no response of the new window yet, so the estimate stands
+    usage = { window: 1_000_000, breakdown: { rawMaxTokens: 1_000_000, totalTokens: 42_000, isAutoCompactEnabled: false, percentage: 4, categories: [] } }
+    await clock.advance(2000)
+    await settle()
+    ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+    expect(await ui.find({ type: 'Text', text: '42k / 1M' })).toBeDefined()
+    await ui.unmount()
+  })
+
   // 2026-10-24: the desktop hides the band under its next-step box; the footer under the prompt stays
   test('the footer line: the band as text, the chips split by a bar, the model left out', () => {
     expect(footerLine(view(calm, NOW, false))).toBe('plan 5h 5% ▱▱▱▱▱▱ ↻2h52 · 7d 38% ↻3d0h · $1.27  │  ☀\uFE0F context ▰▱▱▱▱▱▱▱ 113k / 1M 11% · ▲1.3k · ≈ 675턴  │  ❄\uFE0F 59:06')
@@ -626,7 +684,7 @@ describe('token-gauge', () => {
     const busy: Snapshot = { ...calm, limits, tokens: 800_000, lastRequestAt: NOW - 55 * MIN }
     expect(footerLine(view(busy, NOW, false))).toMatch(/^plan 5h 80% ⚠\uFE0F ▰▰▰▰▰▱ ↻2h52 · 7d 95% ⚠\uFE0F ↻3d0h · \$1\.27 {2}│ {2}⛈\uFE0F context [▰▱]{8} 800k \/ 1M 80% · ▲1\.3k · ≈ \d+턴 {2}│ {2}❄\uFE0F 5:00 ⚠\uFE0F$/) // yellow and red called out
     expect(footerLine(view({ ...busy, lastRequestAt: NOW - 2 * 60 * MIN }, NOW, false))).toMatch(/ {2}│ {2}❄\uFE0F cold ⚠\uFE0F 재기록 ~800k$/)
-    expect(footerLine(view({ ...calm, agents: 1 }, NOW, false), { since: 0, elapsed: 7_000, tools: 1 })).toMatch(/ {2}│ {2}⏳ 0:07 · 도구 1 {2}│ {2}subagent 1 실행 중$/) // while Claude works
+    expect(footerLine(view({ ...calm, agents: [{ id: 'a1', type: 'Explore', description: 'scan', since: NOW }] }, NOW, false), { since: 0, elapsed: 7_000, tools: 1 })).toMatch(/ {2}│ {2}⏳ 0:07 · 도구 1 {2}│ {2}subagent 1 실행 중$/) // while Claude works
     expect(footerLine(view({ ...calm, limits: [], costUsd: undefined, tokens: undefined, lastRequestAt: undefined }, NOW, false))).toBeUndefined()
   })
 

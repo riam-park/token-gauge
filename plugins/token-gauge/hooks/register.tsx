@@ -114,7 +114,9 @@ export type Item = { label: string; tokens: number }
 export type Day = { usd: number; input: number; output: number }
 // Raw estimates; the view scales them by k.
 export type Waste = { rereads: number; rereadTokens: number; rereadTop?: { name: string; count: number }; repeats: number; repeatTokens: number; repeatTop?: string }
-export type Compaction = { before?: number; after?: number; lost: string[] }
+export type Compaction = { before?: number; after?: number; lost: string[]; count?: number }
+export type Running = { id: string; type: string; description: string; since: number }
+export type Reading = { at: number; percent: number }
 export type Snapshot = {
   limits: Limit[]
   costUsd?: number
@@ -132,7 +134,9 @@ export type Snapshot = {
   compaction?: Compaction // the last one this session
   model?: string
   effort?: string | number
-  agents?: number // subagents running now, with or without a turn
+  agents?: Running[] // subagents running now, with or without a turn
+  tools?: Record<string, number> // the main thread's tool results this session by tool, raw estimates
+  fiveTrail?: Reading[] // 5h readings over about the last hour, oldest first
 }
 type Bar = { percent: number; color: string; marker?: number }
 export type View = {
@@ -217,9 +221,11 @@ export const register: Register = (on, options) => {
         .then(async now => {
           // a subagent can outlive the turn that started it: counted every other second, a turn or not
           if (tick % 2 === 0) {
-            const agents = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running').length
-            if (agents !== (snap.agents ?? 0)) {
-              snap = { ...snap, agents }
+            const running = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running')
+            const ids = (list: readonly { id: string }[]) => list.map(a => a.id).join()
+            if (ids(running) !== ids(snap.agents ?? [])) {
+              const since = (id: string) => snap.agents?.find(a => a.id === id)?.since ?? now // first seen, within 2 seconds
+              snap = { ...snap, agents: running.map(a => ({ id: a.id, type: a.type, description: a.description, since: since(a.id) })) }
               $.ui.invalidate('ui.render')
             }
           }
@@ -233,7 +239,7 @@ export const register: Register = (on, options) => {
         .catch(() => {})
     })
     const usage = await $.session.usage().catch(() => null)
-    if (usage) takeLimits(usage.rateLimits, usage.cost?.usd)
+    if (usage) takeLimits(usage.rateLimits, usage.cost?.usd, await $.clock.now())
     const model = await $.session.model().catch(() => '')
     if (model && !snap.model) snap = { ...snap, model }
     await readContext($, false).catch(() => {})
@@ -244,7 +250,7 @@ export const register: Register = (on, options) => {
 
   on('session.measure', async ($, e, next) => {
     const result = await next(e)
-    takeLimits(e.rateLimits, e.cost?.usd)
+    takeLimits(e.rateLimits, e.cost?.usd, await $.clock.now())
     if (e.cost) mine = { ...mine, usd: e.cost.usd }
     $.ui.invalidate('ui.render')
     return result
@@ -297,6 +303,8 @@ export const register: Register = (on, options) => {
       const label = itemLabel(input)
       const tokens = estimate(result)
       turnItems.push({ label, tokens })
+      const tool = toolKey(String(input.tool ?? 'tool'))
+      snap = { ...snap, tools: { ...snap.tools, [tool]: (snap.tools?.[tool] ?? 0) + tokens } }
       observe($, input, label, tokens, fnv(resultText(result)))
       // shortcut: the desktop app's next-step box, read off its tool as 2.1.308 names it; a box closed by hand is not
       // seen, so the footer line stays until the next turn. Revisit if the app renames the tool.
@@ -329,9 +337,12 @@ export const register: Register = (on, options) => {
     if (!e.agentId && e.trigger !== 'precompute' && typeof result.skip !== 'string') {
       epoch++
       steps = { ...steps, compacted: true }
-      snap = { ...snap, compaction: { before: result.tokensBefore, after: result.tokensAfter, lost: lostFiles([...edited], result.messages) } }
+      const compaction = { before: result.tokensBefore, after: result.tokensAfter, lost: lostFiles([...edited], result.messages), count: (snap.compaction?.count ?? 0) + 1 }
+      snap = { ...snap, tokens: result.tokensAfter ?? snap.tokens, compaction }
+      $.ui.invalidate('ui.render')
+      // until the engine takes the result, usage still reports the request before the compaction: read it after
+      $.clock.after(2000, () => void readContext($, false).catch(() => {}))
     }
-    void readContext($, false).catch(() => {})
     return result
   }).catch(async ($, e, next) => next(e)) // observer only: never stands in the way of a compaction
 
@@ -444,9 +455,18 @@ function fillPrompt($: EngineInterface, text: string) {
     .catch(() => $.ui.toast('입력창에 넣지 못했습니다'))
 }
 
-function takeLimits(rateLimits: readonly Limit[] | undefined, costUsd: number | undefined) {
+function takeLimits(rateLimits: readonly Limit[] | undefined, costUsd: number | undefined, now: number) {
   const limits = (rateLimits ?? []).filter(w => Number.isFinite(w.percentUsed))
-  snap = { ...snap, limits: limits.length ? limits : snap.limits, costUsd: costUsd ?? snap.costUsd }
+  const five = limits.find(l => l.kind === 'five_hour')
+  snap = { ...snap, limits: limits.length ? limits : snap.limits, costUsd: costUsd ?? snap.costUsd, fiveTrail: five ? trail(snap.fiveTrail ?? [], five.percentUsed, now) : snap.fiveTrail }
+}
+
+// The 5h readings of about the last hour, for its recent pace: one on each change and every 5 minutes; a drop is a new window.
+export function trail(list: readonly Reading[], percent: number, now: number): Reading[] {
+  const last = list.at(-1)
+  if (last && percent < last.percent) return [{ at: now, percent }]
+  const kept = list.filter(x => now - x.at <= 65 * 60_000)
+  return last && last.percent === percent && now - last.at < 5 * 60_000 ? kept : [...kept, { at: now, percent }]
 }
 
 // /context's summary, estimated locally: the compact line and the categories too.
@@ -707,7 +727,7 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
       if (five.elapsed !== undefined) {
         v.detail.push({
           label: '5h',
-          text: `리셋 ${clock(five.resetMs)} (${countdown(five.resetMs - now)}) · 경과 ${Math.round(five.elapsed)}% 대비 사용 ${Math.round(p)}% → ${pace(p, five.elapsed)}${forecastText(p, five.elapsed, five.resetMs, now)}`,
+          text: `리셋 ${clock(five.resetMs)} (${countdown(five.resetMs - now)}) · 경과 ${Math.round(five.elapsed)}% 대비 사용 ${Math.round(p)}% → ${pace(p, five.elapsed)}${forecastText(p, five.elapsed, five.resetMs, now)}${recentForecast(s.fiveTrail ?? [], now, five.resetMs)}`,
         })
       }
     }
@@ -753,6 +773,12 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
   if (s.top.length) {
     v.detail.push({ label: '지난 턴', text: `큰 결과: ${s.top.map(i => `${i.label} ≈${adj(i.tokens)}`).join(' · ')}${s.k === undefined ? '' : ` · 추정 ×${s.k.toFixed(2)}`}` })
   }
+  const byTool = Object.entries(s.tools ?? {}).sort((a, b) => b[1] - a[1])
+  const toolTotal = byTool.reduce((a, [, n]) => a + n, 0)
+  if (toolTotal >= 1000) {
+    const more = byTool.length > 4 ? ` 외 ${byTool.length - 4}종` : ''
+    v.detail.push({ label: '도구별', text: `${byTool.slice(0, 4).map(([t, n]) => `${t} ≈${adj(n)}`).join(' · ')}${more} · 세션 합계 ≈${adj(toolTotal)}` })
+  }
   const w = s.waste
   if (w && (w.rereads || w.repeats)) {
     const parts: string[] = []
@@ -765,18 +791,23 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
     const size = c.before && c.after ? `${short(c.before)} → ${short(c.after)}` : '완료'
     const names = c.lost.map(fileName)
     const lost = names.length ? ` · 요약에 빠진 편집 파일 ${names.length}개: ${names.slice(0, 3).join(', ')}${names.length > 3 ? ' 외' : ''}` : ''
-    v.detail.push({ label: 'compact', text: `${size}${lost}` })
+    v.detail.push({ label: 'compact', text: `${c.count ? `${c.count}회 · ` : ''}${size}${lost}` })
   }
   if (s.model) {
     if (cfg.showCost && !prices(s.model, 0)) v.detail.push({ label: '비용', text: `단가표에 없는 모델(${s.model})이라 금액을 보이지 않습니다` })
     const name = modelName(s.model)
     v.model = { name, effort: s.effort === undefined ? undefined : String(s.effort), color: FAMILY[name.split(' ')[0]!.toLowerCase()] ?? C.marker }
   }
-  if (s.agents) v.agents = s.agents
+  if (s.agents?.length) {
+    v.agents = s.agents.length
+    const what = (d: string) => (d.length > 24 ? `${d.slice(0, 23)}…` : d)
+    v.detail.push({ label: 'subagent', text: s.agents.map(a => `${a.type} ${what(a.description)} ${mmss(now - a.since)}`).join(' · ') })
+  }
   if (s.lastRequestAt !== undefined) {
     const expires = s.lastRequestAt + cfg.cacheTtlMs
     const left = expires - now
-    const rate = s.cache.total ? ` · 적중률 ${Math.round((s.cache.read / s.cache.total) * 100)}% · 재기록 ${s.cache.rewrites}회` : ''
+    const saved = cfg.showCost ? savedUsd(s.model, s.cache.read) : undefined
+    const rate = s.cache.total ? ` · 적중률 ${Math.round((s.cache.read / s.cache.total) * 100)}% · 재기록 ${s.cache.rewrites}회${saved && saved >= 0.01 ? ` · 절약 ≈$${saved.toFixed(2)}` : ''}` : ''
     if (left <= 0) {
       const usd = cfg.showCost && s.tokens ? rewriteUsd(s.model, s.tokens, cfg.cacheTtlMs) : undefined
       v.cache = { color: C.red, text: 'cold', isCold: true, rewrite: s.tokens ? `재기록 ~${short(s.tokens)}${usd === undefined ? '' : ` ≈$${usd.toFixed(2)}`}` : undefined, offerKeep: false }
@@ -827,6 +858,13 @@ export function prices(model: string | undefined, tokens: number) {
 export function rewriteUsd(model: string | undefined, tokens: number, ttlMs: number) {
   const p = prices(model, tokens)
   return p && (tokens / 1e6) * p.input * (ttlMs >= 60 * 60_000 ? 2 : 1.25)
+}
+
+// What reading `readTokens` from the cache saved over sending them uncached, at list price.
+// shortcut: priced at the current model's rates, so a session that switched models is off by the mix
+export function savedUsd(model: string | undefined, readTokens: number) {
+  const p = prices(model, 0)
+  return p && (readTokens / 1e6) * (p.input - p.read)
 }
 
 // What the handoff memo costs: one request over the context, read from the cache or written again if it went cold,
@@ -1336,6 +1374,11 @@ export function unusedServers(tools: readonly McpTool[], called: ReadonlySet<str
     .sort((a, b) => b.tokens - a.tokens)
 }
 
+// A tool as the per-tool line counts it: an MCP tool by its server (mcp__rea__open_binary → mcp__rea).
+export function toolKey(tool: string) {
+  return tool.startsWith('mcp__') ? tool.split('__').slice(0, 2).join('__') : tool
+}
+
 // mcp__claude_ai_Gmail__x and "claude.ai Gmail" name the same server.
 function serverKey(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -1390,6 +1433,18 @@ export function forecastText(used: number, elapsed: number, resetMs: number, now
   const windowTotal = windowLeft / (1 - elapsed / 100)
   const fullAt = now + ((100 - used) / used) * (windowTotal - windowLeft)
   return ` · 이 속도면 ${clock(fullAt)}에 100%`
+}
+
+// Where the 5h window ends at the pace of the last hour's readings, which a window-long average hides: a busy
+// last hour after a quiet start. Needs at least 10 minutes of readings and some growth.
+export function recentForecast(list: readonly Reading[], now: number, resetMs: number) {
+  const from = list.find(x => now - x.at <= 60 * 60_000)
+  const last = list.at(-1)
+  if (!from || !last || last.at - from.at < 10 * 60_000 || last.percent <= from.percent) return ''
+  const rate = (last.percent - from.percent) / (last.at - from.at)
+  const fullAt = last.at + (100 - last.percent) / rate
+  if (fullAt < resetMs) return ` · 최근 1시간 속도면 ${clock(fullAt)}에 100%`
+  return ` · 최근 1시간 속도면 리셋 때 ~${Math.round(last.percent + rate * (resetMs - last.at))}%`
 }
 
 // Redraws each minute for the reset countdown, and for the cache every 15 s, every second in its last two minutes.
