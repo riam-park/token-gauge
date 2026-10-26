@@ -137,6 +137,7 @@ export type Snapshot = {
   effort?: string | number
   agents?: Running[] // subagents running now, with or without a turn
   tools?: Record<string, number> // the main thread's tool results this session by tool, raw estimates
+  calls?: Record<string, number> // tool calls this session by tool, subagents' included
   fiveTrail?: Reading[] // 5h readings over about the last hour, oldest first
 }
 type Bar = { percent: number; color: string; marker?: number }
@@ -299,12 +300,13 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     const result = await next(e)
     if (work) work = { ...work, tools: work.tools + 1 }
+    const input = e as Record<string, unknown>
+    const tool = toolKey(String(input.tool ?? 'tool'))
+    snap = { ...snap, calls: { ...snap.calls, [tool]: (snap.calls?.[tool] ?? 0) + 1 } }
     if (!(e as { agentId?: string }).agentId) {
-      const input = e as Record<string, unknown>
       const label = itemLabel(input)
       const tokens = estimate(result)
       turnItems.push({ label, tokens })
-      const tool = toolKey(String(input.tool ?? 'tool'))
       snap = { ...snap, tools: { ...snap.tools, [tool]: (snap.tools?.[tool] ?? 0) + tokens } }
       observe($, input, label, tokens, fnv(resultText(result)))
       // shortcut: the desktop app's next-step box, read off its tool as 2.1.308 names it; a box closed by hand is not
@@ -689,7 +691,7 @@ async function warnIfCacheTaxAbove($: EngineInterface, trace: readonly { plugin:
 async function holdCache($: EngineInterface, hold: string | undefined) {
   if (!JSON.stringify(await $.command.list().catch(() => [])).includes('"keepwarm"')) return
   const done = await $.command.run({ command: 'keepwarm', args: hold ?? 'off' }).then(() => true).catch(() => false)
-  $.ui.toast(!done ? '/keepwarm을 실행하지 못했습니다' : hold ? `/keepwarm으로 ${koDuration(hold)} 동안 캐시를 유지합니다` : '캐시 유지는 켜지 않았습니다')
+  $.ui.toast(!done ? '/keepwarm을 실행하지 못했습니다' : hold ? `/keepwarm으로 ${koDuration(hold)} 동안 캐시를 유지합니다` : '/keepwarm off: 보내기만 골라 cache-tax의 자동 캐시 유지를 껐습니다')
 }
 
 // A tip toast, once per key a session, when alerts are on.
@@ -775,11 +777,17 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
   if (s.top.length) {
     v.detail.push({ label: '지난 턴', text: `큰 결과: ${s.top.map(i => `${i.label} ≈${adj(i.tokens)}`).join(' · ')}${s.k === undefined ? '' : ` · 추정 ×${s.k.toFixed(2)}`}` })
   }
-  const byTool = Object.entries(s.tools ?? {}).sort((a, b) => b[1] - a[1])
+  // by result size, then by calls: a tool only subagents called has calls and no size
+  const calls = s.calls ?? {}
+  const byTool = [...new Set([...Object.keys(s.tools ?? {}), ...Object.keys(calls)])]
+    .map(t => [t, s.tools?.[t] ?? 0, calls[t] ?? 0] as const)
+    .sort((a, b) => b[1] - a[1] || b[2] - a[2])
   const toolTotal = byTool.reduce((a, [, n]) => a + n, 0)
-  if (toolTotal >= 1000) {
+  const callTotal = byTool.reduce((a, [, , c]) => a + c, 0)
+  const sized = (c: number, n: number) => [c && `${c}회`, n && `≈${adj(n)}`].filter(Boolean).join(' ')
+  if (toolTotal >= 1000 || callTotal) {
     const more = byTool.length > 4 ? ` 외 ${byTool.length - 4}종` : ''
-    v.detail.push({ label: '도구별', text: `${byTool.slice(0, 4).map(([t, n]) => `${t} ≈${adj(n)}`).join(' · ')}${more} · 세션 합계 ≈${adj(toolTotal)}` })
+    v.detail.push({ label: '도구별', text: `${byTool.slice(0, 4).map(([t, n, c]) => `${t} ${sized(c, n)}`).join(' · ')}${more} · 세션 합계 ${sized(callTotal, toolTotal)}` })
   }
   const w = s.waste
   if (w && (w.rereads || w.repeats)) {

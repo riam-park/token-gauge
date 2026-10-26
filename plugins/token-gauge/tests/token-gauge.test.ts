@@ -316,7 +316,7 @@ describe('token-gauge', () => {
     expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
     await ui.press({ key: 'token-gauge-more' })
     expect(await ui.find({ type: 'Text', text: /^변경 없는 재읽기 1회 ≈\d+ \(a\.ts 1회\) · 같은 출력 1회 ≈10k \(Bash make log\)$/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^Bash ≈20k · Read ≈\d+ · 세션 합계 ≈20k$/ })).toBeDefined() // 2026-10-24: the session's results by tool
+    expect(await ui.find({ type: 'Text', text: /^Bash 2회 ≈20k · Read 2회 ≈\d+ · 세션 합계 4회 ≈20k$/ })).toBeDefined() // 2026-10-24: the session's results by tool; 10-26 with calls
     expect(shown.filter(t => t.startsWith('긴 명령 출력: Bash make log')).length).toBe(1)
     await ui.unmount()
   })
@@ -472,7 +472,7 @@ describe('token-gauge', () => {
   // 2026-10-24: sending showed the drop and the prompt a second time; now the same submission passes, once
   for (const [choice, sent, filled, surface, kind, keepwarm, toast] of [
     ['보내고 3시간 유지 ($2.02 + 약 $0.15)', 1, 0, 'terminal', 'composer', '3h00m', '/keepwarm으로 3시간 동안 캐시를 유지합니다'],
-    ['보내기만 ($2.02)', 1, 0, 'desktop', 'sdk', 'off', '캐시 유지는 켜지 않았습니다'],
+    ['보내기만 ($2.02)', 1, 0, 'desktop', 'sdk', 'off', '/keepwarm off: 보내기만 골라 cache-tax의 자동 캐시 유지를 껐습니다'],
     ['취소', 0, 1, 'desktop', 'sdk', '', ''],
   ] as const) {
     test(`a prompt another hook dropped is asked about before the drop shows (${choice}, ${surface})`, async ($: any, on: any) => {
@@ -639,6 +639,9 @@ describe('token-gauge', () => {
     const tools = { Read: 120_000, Bash: 40_000, Agent: 18_000, mcp__rea: 9000, Grep: 300 }
     expect(detail({ ...calm, tools }, '도구별')).toBe('Read ≈120k · Bash ≈40k · Agent ≈18k · mcp__rea ≈9k 외 1종 · 세션 합계 ≈187k')
     expect(detail({ ...calm, tools: { Read: 400 } }, '도구별')).toBeUndefined() // too little to say anything
+    // calls count subagents' too, so a tool only they called shows its calls alone
+    expect(detail({ ...calm, tools: { Read: 120_000, Bash: 400 }, calls: { Read: 25, Bash: 31, Grep: 9 } }, '도구별')).toBe('Read 25회 ≈120k · Bash 31회 ≈400 · Grep 9회 · 세션 합계 65회 ≈120k')
+    expect(detail({ ...calm, calls: { Bash: 2 } }, '도구별')).toBe('Bash 2회 · 세션 합계 2회')
     expect(Math.round(savedUsd('claude-opus-5-5', 1_000_000)! * 100)).toBe(380) // $4 input - $0.20 read, per million
     expect(savedUsd(undefined, 1_000_000)).toBeUndefined()
     const cache = { read: 2_000_000, total: 2_100_000, rewrites: 1, steps: 9 }
