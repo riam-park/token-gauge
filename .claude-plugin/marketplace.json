@@ -8,7 +8,7 @@
     {
       "name": "token-gauge",
       "description": "Plan limits, context, the prompt-cache countdown and the model as color-coded chips above the prompt, with a detail panel, token-saving buttons and tips.",
-      "version": "1.8.1",
+      "version": "1.9.0",
       "source": "./plugins/token-gauge"
     }
   ]
