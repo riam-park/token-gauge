@@ -12,6 +12,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 const WINDOW_MS: Record<string, number> = { five_hour: 5 * 60 * 60_000, seven_day: 7 * 24 * 60 * 60_000 }
 const FAST_BELOW_MS = 2 * 60_000
 const KEEP_BELOW_MS = 10 * 60_000
+const KEEP_HOLDS = ['1h', '3h', '6h'] // the keep button's holds, as /keepwarm takes them
 const CACHE_ALERT_MS = 5 * 60_000
 const DELTAS = 5
 const TOP = 3
@@ -435,12 +436,7 @@ async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, colu
 
 function actions($: EngineInterface): Actions {
   return {
-    keepWarm: () => {
-      $.command
-        .run({ command: 'keepwarm', args: '90m' })
-        .then(() => $.ui.toast('cache-tax: 90분 동안 캐시를 유지합니다 · /keepwarm off로 취소'))
-        .catch(() => $.ui.toast('cache-tax의 /keepwarm을 실행하지 못했습니다'))
-    },
+    keepWarm: () => void askKeep($).catch(() => {}),
     compact: () => fillPrompt($, `/compact ${compactArgs([...edited])}`.trim()),
     handoff: () => fillPrompt($, handoffText(cfg.handoffDir, snap.compaction?.lost)),
     toggle: () => {
@@ -631,34 +627,60 @@ async function typedByPerson($: EngineInterface, kind: string) {
 async function askDropped($: EngineInterface, text: string, by: string, reason: string): Promise<string | { hold?: string }> {
   const card = cardText(by, reason, cfg.cacheTtlMs, snap.model)
   const cost = card.cost ? `$${card.cost}` : ''
-  const keep = card.hold ? `보내고 ${koDuration(card.hold)} 유지 (${[cost, card.keepUsd && `약 $${card.keepUsd}`].filter(Boolean).join(' + ') || '비용 미상'})` : undefined
-  const send = card.hold ? `보내기만${cost && ` (${cost})`}` : `${SEND_ANYWAY}${cost && ` (${cost})`}`
-  const answer = await $.ui.ask(card.question, { options: keep ? [keep, send, PUT_BACK] : [send, PUT_BACK], header: 'token-gauge' }).catch(() => undefined)
-  if (answer === keep || answer === send) return { hold: answer === keep ? card.hold : undefined }
+  const keeps = (card.holds ?? []).map(h => ({ hold: h.hold, label: `보내고 ${koDuration(h.hold)} 유지 (${[cost, h.usd && `약 $${h.usd}`].filter(Boolean).join(' + ') || '비용 미상'})` }))
+  const send = keeps.length ? `보내기만${cost && ` (${cost})`}` : `${SEND_ANYWAY}${cost && ` (${cost})`}`
+  const answer = await $.ui.ask(card.question, { options: [...keeps.map(k => k.label), send, PUT_BACK], header: 'token-gauge' }).catch(() => undefined)
+  const kept = keeps.find(k => k.label === answer)
+  if (kept || answer === send) return { hold: kept?.hold }
   await $.prompt.fill({ text: answer && answer !== PUT_BACK ? answer : text, mode: 'replace' }).catch(() => {})
   return answer ? 'token-gauge: 보내지 않았습니다. 입력창에 되돌렸습니다.' : reason
 }
 
 // The card's question: who dropped the prompt, why (cache-tax's English reason read into Korean; any other reason as
-// it came), and what cancelling does. `cost` is what sending costs, when the reason says; `hold` the cache hold the
-// reason offers, `keepUsd` what holding it costs.
+// it came), and what cancelling does. `cost` is what sending costs, when the reason says; `holds` the cache holds on
+// offer when the reason offers one (the card has room for the first two of KEEP_HOLDS), each with what it costs.
 export function cardText(by: string, reason: string, ttlMs: number, model?: string) {
   const why = reason.startsWith(`${by}:`) ? reason.slice(by.length + 1).trimStart() : reason
   const m = /went cold (.+?) ago\. Sending this re-writes up to ([\d,]+) tokens at \$([\d.]+)\/MTok = \$([\d.]+) \(a warm turn would have cost \$([\d.]+)\)/.exec(why)
-  const hold = keepwarmHold(why)
-  const pings = hold ? keepPings(hold, ttlMs) : undefined
-  // a ping reads the cache once, at the model's cache-read price
   const tokens = m ? Number(m[2]!.replace(/,/g, '')) : 0
-  const read = prices(model, tokens)?.read
-  const keepUsd = m && pings && read !== undefined ? ((tokens / 1e6) * read * pings).toFixed(2) : undefined
+  const holds = keepwarmHold(why) ? KEEP_HOLDS.slice(0, 2).map(hold => ({ hold, usd: keepUsd(hold, tokens, ttlMs, model) })) : undefined
   const lines = [`${by} 플러그인이 이 프롬프트를 막았습니다.`]
   if (m) {
     lines.push(`프롬프트 캐시가 ${koDuration(m[1]!)} 전에 식어서, 지금 보내면 ${m[2]}토큰을 다시 기록합니다: $${m[4]} (캐시가 살아 있었으면 $${m[5]})`)
-    if (hold) lines.push(`${koDuration(hold)} 유지를 고르면 ${by}가 ${keepUsd ? `50분마다 캐시를 갱신합니다(${pings}번, 약 $${keepUsd})` : '/keepwarm으로 캐시를 유지합니다'}. 보내기만 고르면 유지를 켜지 않습니다.`)
+    const ping = holds?.[0]!.usd // 1h: one refresh
+    if (holds) lines.push(`유지를 고르면 ${by}가 ${ping ? `50분마다 캐시를 갱신합니다(회당 약 $${ping})` : '/keepwarm으로 캐시를 유지합니다'}. 보내기만 고르면 유지를 켜지 않습니다.`)
   } else lines.push(why.length > 600 ? `${why.slice(0, 599)}…` : why)
   // cache-tax lets the same prompt through when it is sent again: cancelling then resending pays all the same
   lines.push(`그래도 보낼까요? ${PUT_BACK}하면 입력창에 되돌립니다.${m ? ` 입력창에서 다시 보내면 ${by}가 비용을 내는 것으로 보고 통과시킵니다.` : ''}`)
-  return { question: lines.join('\n'), cost: m?.[4], hold, keepUsd }
+  return { question: lines.join('\n'), cost: m?.[4], holds }
+}
+
+// What holding the cache for `hold` costs at list price: each refresh reads `tokens` once at the cache-read price.
+export function keepUsd(hold: string, tokens: number, ttlMs: number, model?: string) {
+  const pings = keepPings(hold, ttlMs)
+  const read = prices(model, tokens)?.read
+  return tokens && pings && read !== undefined ? ((tokens / 1e6) * read * pings).toFixed(2) : undefined
+}
+
+// The keep button's question: one option per hold in KEEP_HOLDS, in order, each priced when the model's are known.
+export function keepChoices(tokens: number, ttlMs: number, model?: string) {
+  const ping = keepUsd('1h', tokens, ttlMs, model)
+  const rewrite = tokens ? rewriteUsd(model, tokens, ttlMs) : undefined
+  const options = KEEP_HOLDS.map(h => `${koDuration(h)}${(u => (u ? ` (약 $${u})` : ''))(keepUsd(h, tokens, ttlMs, model))}`)
+  const lines = ['캐시를 얼마나 유지할까요?', ping && `50분마다 한 번 갱신합니다(회당 약 $${ping}).`, rewrite !== undefined && `식은 뒤 다시 보내면 재기록 약 $${rewrite.toFixed(2)}`]
+  return { question: lines.filter(Boolean).join('\n'), options }
+}
+
+// The keep button: how long to hold the cache, then cache-tax's /keepwarm for it.
+async function askKeep($: EngineInterface) {
+  const { question, options } = keepChoices(snap.tokens ?? 0, cfg.cacheTtlMs, snap.model)
+  const answer = await $.ui.ask(question, { options: [...options, PUT_BACK], header: 'token-gauge' }).catch(() => undefined)
+  const hold = KEEP_HOLDS[options.indexOf(answer ?? '')]
+  if (!hold) return
+  await $.command
+    .run({ command: 'keepwarm', args: hold })
+    .then(() => $.ui.toast(`cache-tax: ${koDuration(hold)} 동안 캐시를 유지합니다 · /keepwarm off로 취소`))
+    .catch(() => $.ui.toast('cache-tax의 /keepwarm을 실행하지 못했습니다'))
 }
 
 // How many times cache-tax refreshes a 1-hour cache over the hold: every 50 minutes, as its status line counts down.
@@ -914,7 +936,7 @@ export function text(v: View): string {
   }
   if (v.cache) {
     const k = v.cache
-    chips.push(`[❄ ${k.text}${k.rewrite ? ` ${k.rewrite}` : ''}${k.offerKeep ? ' (유지 90분)' : ''}]`)
+    chips.push(`[❄ ${k.text}${k.rewrite ? ` ${k.rewrite}` : ''}${k.offerKeep ? ' (캐시 유지)' : ''}]`)
   }
   if (v.model) chips.push(`[${v.model.name}${v.model.effort ? ` · ${v.model.effort}` : ''}]`)
   if (v.agents) chips.push(`[subagent ${v.agents} 실행 중]`)
@@ -995,7 +1017,7 @@ type Actions = { keepWarm: () => void; compact: () => void; handoff: () => void;
 
 function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working: (Work & { elapsed: number }) | undefined, isYielding: boolean) {
   const { Box, Text, Button } = ui
-  const keep = v.cache?.offerKeep && !isYielding ? <Button key="token-gauge-keep" label="유지 90분" onPress={act.keepWarm} /> : undefined
+  const keep = v.cache?.offerKeep && !isYielding ? <Button key="token-gauge-keep" label="캐시 유지" onPress={act.keepWarm} /> : undefined
   const row = chipRow(ui, v, isTerminal, keep, working)
   if (v.ctx?.offerActions && !working && !isYielding) {
     const a = actionLabels(v)
