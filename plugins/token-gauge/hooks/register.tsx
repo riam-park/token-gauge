@@ -396,7 +396,8 @@ export const register: Register = (on, options) => {
       await $.prompt.fill({ text: e.text, mode: 'replace' }).catch(() => {})
       return { drop: `token-gauge: 다시 보내도 막혀 입력창에 되돌렸습니다. ${again.drop}` }
     }
-    $.clock.after(0, () => void holdCache($, answer.hold).catch(() => {})) // past this hook: a command waits for the turn to end
+    const hold = answer.hold
+    if (hold) $.clock.after(0, () => void holdCache($, hold).catch(() => {})) // only an explicit hold queues a command past the hook
     return again
   }).catch(async ($, e, next) => next(e)) // observer only: never stands in the way of a prompt
 
@@ -720,7 +721,7 @@ export function cardText(by: string, reason: string, ttlMs: number, model?: stri
   if (m) {
     lines.push(`프롬프트 캐시가 ${koDuration(m[1]!)} 전에 식어서, 지금 보내면 ${m[2]}토큰을 다시 기록합니다: $${m[4]} (캐시가 살아 있었으면 $${m[5]})`)
     const ping = holds?.[0]!.usd // 1h: one refresh
-    if (holds) lines.push(`유지를 고르면 ${by}가 ${ping ? `50분마다 캐시를 갱신합니다(회당 약 $${ping})` : '/keepwarm으로 캐시를 유지합니다'}. 보내기만 고르면 유지를 켜지 않습니다.`)
+    if (holds) lines.push(`유지를 고르면 ${by}가 ${ping ? `50분마다 캐시를 갱신합니다(회당 약 $${ping})` : '/keepwarm으로 캐시를 유지합니다'}. 보내기만 고르면 추가 명령 없이 답변만 보냅니다.`)
   } else lines.push(why.length > 600 ? `${why.slice(0, 599)}…` : why)
   // cache-tax lets the same prompt through when it is sent again: cancelling then resending pays all the same
   lines.push(`그래도 보낼까요? ${PUT_BACK}하면 입력창에 되돌립니다.${m ? ` 입력창에서 다시 보내면 ${by}가 비용을 내는 것으로 보고 통과시킵니다.` : ''}`)
@@ -780,12 +781,11 @@ async function warnIfCacheTaxAbove($: EngineInterface, trace: readonly { plugin:
   $.ui.toast('cache-tax가 먼저 실행돼 막힘 확인 카드가 안 뜹니다 · token-gauge를 플러그인 목록 앞으로(README)', { timeoutMs: 15_000 }) // one terminal line
 }
 
-// The hold the person chose is asked of /keepwarm; with none, `/keepwarm off`, since cache-tax holds the cache on its
-// own once a cold write is paid. Commands wait for the turn to end, so this runs after cache-tax's own.
-async function holdCache($: EngineInterface, hold: string | undefined) {
+// Only an explicit hold runs /keepwarm. Sending alone must not queue a command after the person's answer.
+async function holdCache($: EngineInterface, hold: string) {
   if (!JSON.stringify(await $.command.list().catch(() => [])).includes('"keepwarm"')) return
-  const done = await $.command.run({ command: 'keepwarm', args: hold ?? 'off' }).then(() => true).catch(() => false)
-  $.ui.toast(!done ? '/keepwarm을 실행하지 못했습니다' : hold ? `/keepwarm으로 ${koDuration(hold)} 동안 캐시를 유지합니다` : '/keepwarm off: 보내기만 골라 cache-tax의 자동 캐시 유지를 껐습니다')
+  const done = await $.command.run({ command: 'keepwarm', args: hold }).then(() => true).catch(() => false)
+  $.ui.toast(!done ? '/keepwarm을 실행하지 못했습니다' : `/keepwarm으로 ${koDuration(hold)} 동안 캐시를 유지합니다`)
 }
 
 // A tip toast, once per key a session, when alerts are on.
