@@ -311,7 +311,7 @@ claude plugin validate ./plugins/token-gauge
 - **확인한 버전**: Windows 11 Pro, 구독 로그인(1시간 캐시)
   - Claude 데스크톱 앱 Code 탭, Claude Code **2.1.304**: 칩, 상세 패널, 범주별 막대를 실제 화면으로 확인했습니다.
   - 터미널(Windows Terminal), Claude Code **2.1.306**: 칩 줄과 상세 패널을 실제 화면으로 확인했습니다.
-  - Claude 앱 터미널 패널, Claude Code **2.1.308**: 막힌 프롬프트 카드(`보내고 3시간 유지`/`보내기만`/`취소`), 순서 경고, 120칸에서 작업 중 칩 줄을 실제 화면으로 확인했습니다. 데스크톱 앱의 막힌 프롬프트 카드와 정리 버튼(`/compact`, 인계 메모)은 세션 기록으로 확인했습니다.
+  - Claude 앱 터미널 패널, Claude Code **2.1.308**: 막힌 프롬프트 카드(`보내고 3시간 유지`/`보내기만`/`취소`), 순서 경고, 120칸에서 작업 중 칩 줄을 실제 화면으로 확인했습니다. 데스크톱 앱의 막힌 프롬프트 카드는 세션 기록으로 확인했습니다.
   - Claude 데스크톱 앱 Code 탭, Claude Code **2.1.308**(개발본 사본): 다음 단계 박스가 떠 있는 동안 입력창 밑 한 줄을 실제 화면으로 확인했습니다.
   - 터미널(헤드리스 ConPTY 화면을 색까지 그림으로 그림), Claude Code **2.1.308**(1.8.0): 160칸과 90칸에서 테두리 없는 한 줄 칩 줄과 색을 확인했습니다.
   - Claude 데스크톱 앱 Code 탭, Claude Code **2.1.308**(1.8.0): 다음 단계 박스 동안 입력창 밑 줄을 실제 화면으로 확인했습니다. 앱이 약 27자에서 잘라 1.8.1에서 줄였고, 작업 중 칩 줄이 칩 안에서 두 줄로 넘어가는 것을 보고 고쳤습니다.
@@ -319,14 +319,14 @@ claude plugin validate ./plugins/token-gauge
   - `claude plugin validate`와 `claude plugin test`를 통과합니다. GitHub Actions에서 같은 버전으로 매번 검사합니다.
   - GitHub 주소로 마켓플레이스 추가, 설치, 새 세션 로드를 확인했습니다.
 - **최소 버전**: 2.1.287 (mod 기능이 기본으로 켜지는 버전)
-- **아직 실제 화면으로 확인하지 않은 것**: macOS와 Linux, `캐시 유지` 버튼, 정리 버튼이 입력창을 채우는 동작과 인계 메모 금액, 빈 입력창의 `/keepwarm 90m` 제안, 1.3.0에서 더한 모델 칩/질문 카드 위 칩/상세 패널 `중복`과 `compact` 줄/절약 팁, 좁은 터미널(약 80칸 미만)의 한 줄 글자, 상세 패널 `도구별` 줄과 최근 1시간 예측/compact 횟수, `/compact` 직후 context 칩, 식은 캐시 금액(시험과 엔진 검사만 통과)
+- **아직 실제 화면으로 확인하지 않은 것**: macOS와 Linux, `캐시 유지` 버튼, 빈 입력창의 `/keepwarm 90m` 제안, 1.3.0에서 더한 모델 칩/질문 카드 위 칩/상세 패널 `중복`과 `compact` 줄/절약 팁, 좁은 터미널(약 80칸 미만)의 한 줄 글자, 상세 패널 `도구별` 줄과 최근 1시간 예측/compact 횟수, `/compact` 직후 context 칩, 식은 캐시 금액(시험과 엔진 검사만 통과)
 
 ## 🤖 Claude가 이 저장소를 설치할 때 따를 순서
 
 > 사용자가 이 저장소 링크와 함께 "내 클로드에 반영해줘", "설치해줘"라고 하면 Claude는 아래 순서를 따릅니다.
 
 1. **버전 확인**: 셸에서 `claude --version`을 실행합니다. 2.1.287 미만이면 사용자에게 알리고 `claude update`를 제안합니다. 데스크톱 앱이라면 사용자에게 `/status`의 **Claude Code** 버전을 물어봅니다.
-2. **설정 묻기**: [설치할 때 묻는 설정](#%EF%B8%8F-설치할-때-묻는-설정)의 다섯 항목을 기본값과 함께 사용자에게 한 번에 묻습니다. 질문 도구(AskUserQuestion)가 있으면 그것을 씁니다. 사용자가 "기본값"이라고 하면 그대로 갑니다. 구독 로그인이 아니라면 `cacheTtl`을 `5m`으로 권합니다.
+2. **설정 묻기**: [설치할 때 묻는 설정](#%EF%B8%8F-설치할-때-묻는-설정)의 세 항목을 기본값과 함께 사용자에게 한 번에 묻습니다. 질문 도구(AskUserQuestion)가 있으면 그것을 씁니다. 사용자가 "기본값"이라고 하면 그대로 갑니다. 구독 로그인이 아니라면 `cacheTtl`을 `5m`으로 권합니다.
 3. **마켓플레이스 추가**: 반드시 HTTPS 주소를 씁니다. `riam-park/token-gauge` 같은 짧은 형식은 SSH로 받으려다 known_hosts 오류로 실패할 수 있습니다.
 
    ```bash
@@ -336,10 +336,8 @@ claude plugin validate ./plugins/token-gauge
 4. **설치**: 셸의 `claude plugin install`은 설정 창을 띄우지 않으므로, 2단계에서 받은 값을 `--config`로 넘깁니다. 기본값과 같은 항목은 생략해도 됩니다.
 
    ```bash
-   claude plugin install token-gauge@token-gauge --scope user --config cacheTtl=1h --config actionsAt=70 --config showCost=true --config alerts=true
+   claude plugin install token-gauge@token-gauge --scope user --config cacheTtl=1h --config showCost=true --config alerts=true
    ```
-
-   사용자가 인계 메모를 파일로 받겠다고 하면 `--config handoffDir=<폴더>`를 덧붙입니다. 비워 두면(기본) 답변으로 받습니다.
 
 5. **확인**: `claude plugin list`에서 `token-gauge@token-gauge`가 `enabled`인지 봅니다.
 6. **선택 설치**: 사용자에게 cache-tax(캐시 유지 버튼용)도 설치할지 묻고, 원하면 [선택: 캐시 유지 버튼](#-선택-캐시-유지-버튼)의 두 명령을 같은 방식(`claude plugin marketplace add ...`, `claude plugin install cache-tax@claude-code-mods --scope user`)으로 실행합니다. 마켓플레이스 이름이 겹친다는 오류가 나면 사용자에게 알리고 건너뜁니다.
