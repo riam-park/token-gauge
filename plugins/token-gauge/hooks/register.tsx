@@ -10,7 +10,6 @@
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 const WINDOW_MS: Record<string, number> = { five_hour: 5 * 60 * 60_000, seven_day: 7 * 24 * 60 * 60_000 }
-const FAST_BELOW_MS = 2 * 60_000
 const KEEP_BELOW_MS = 10 * 60_000
 const KEEP_HOLDS = ['1h', '3h', '6h'] // the keep button's holds, as /keepwarm takes them
 const CACHE_ALERT_MS = 5 * 60_000
@@ -48,41 +47,18 @@ const NEXT_STEP_TOOL = 'mcp__ccd_turn__wrap_up' // the desktop app's turn-end su
 const DESKTOP_SLACK = 8 // columns the graphical surfaces' proportional font and key badge take beyond the estimate (2026-10-24 screen: it wrapped without)
 
 // The userConfig options in plugin.json, asked at install and changed with /plugin configure or /config.
-// handoffDir '' asks for the handoff memo in the answer; a folder asks for a PROMPT file there.
-export type Config = { cacheTtlMs: number; actionsAt: number; showCost: boolean; alerts: boolean; handoffDir: string }
-const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '' }
+export type Config = { cacheTtlMs: number; showCost: boolean; alerts: boolean }
+const DEFAULTS: Config = { cacheTtlMs: 60 * 60_000, showCost: true, alerts: true }
 let cfg = DEFAULTS
 
 // Options as saved, checked: a missing or odd value keeps its default.
 export function configure(o: Record<string, unknown>): Config {
-  const n = Number(o.actionsAt)
-  const dir = typeof o.handoffDir === 'string' ? o.handoffDir.trim().replace(/[\\/]+$/, '') : ''
   cfg = {
     cacheTtlMs: o.cacheTtl === '5m' ? 5 * 60_000 : DEFAULTS.cacheTtlMs,
-    actionsAt: Number.isFinite(n) && n >= 50 && n <= 95 ? n : DEFAULTS.actionsAt,
     showCost: o.showCost !== false,
     alerts: o.alerts !== false,
-    handoffDir: dir,
   }
   return cfg
-}
-
-// What /compact is asked to keep: the files this session edited, which a summary may drop (the compact detail line).
-export function compactArgs(paths: readonly string[]) {
-  if (!paths.length) return ''
-  const shown = paths.slice(-20)
-  return `이번 세션에서 편집한 파일 경로를 요약에 모두 남겨 줘: ${shown.join(', ')}${paths.length > shown.length ? ` 외 ${paths.length - shown.length}개` : ''}`
-}
-
-// `lost`: files edited this session that the last compaction's summary no longer names.
-export function handoffText(dir: string, lost: readonly string[] = []) {
-  const parts = '배경, 관련 파일 경로, 목표, 검증 기준, 범위 밖 항목'
-  const keep = lost.length ? ` compact 요약에 빠진 편집 파일도 메모에 넣어 줘: ${lost.join(', ')}` : ''
-  if (!dir) return `지금까지의 작업을 인계 메모로 정리해 줘. 파일은 만들지 말고 이 답변에 ${parts}을 써 줘. 새 세션에 이 답변을 붙여 넣어 이어서 작업할 거야.${keep}`
-  return (
-    `지금까지의 작업을 인계 메모로 정리해 줘. 저장소의 \`${dir}\` 폴더에 Markdown 파일로 ` +
-    `${parts}을 쓰고 경로를 알려 줘. 새 세션에서 이 파일로 이어서 작업할 거야.${keep}`
-  )
 }
 
 const C = {
@@ -148,7 +124,7 @@ export type View = {
     seven?: { percent: number; color: string; reset?: string }
     cost?: string
   }
-  ctx?: { icon: string; color: string; used: string; window: string; percent: number; bar: Bar; delta?: string; turns?: string; offerActions: boolean; memoUsd?: string }
+  ctx?: { icon: string; color: string; used: string; window: string; percent: number; bar: Bar; delta?: string; turns?: string }
   cache?: { color: string; text: string; isCold: boolean; rewrite?: string; offerKeep: boolean }
   detail: { label: string; text: string }[]
   slices: { name: string; tokens: number; color: string; share: number }[]
@@ -169,12 +145,16 @@ type Advice = { key: string; text: string }
 const empty = (): Snapshot => ({ limits: [], slices: [], deltas: [], top: [], cache: { read: 0, total: 0, rewrites: 0, steps: 0 } })
 let snap: Snapshot = empty()
 let timer: Timer | undefined
+let activeSessionId: string | undefined
+const CACHE_KEY = 'cache-request:'
 let hasKeepwarm = false
 let showDetail = false
 let work: Work | undefined // the main-thread turn in progress
 let turnItems: Item[] = []
 let turnBase: number | undefined // the context when the main-thread turn began, for its ▲ growth
 let mine: Day = { usd: 0, input: 0, output: 0 } // this session's share of today
+let mineDate = ''
+let costSeen = 0 // session cost is cumulative; only its increase belongs to today's total
 const alerted = { fiveHour: '', ctx: false, cacheFor: 0 }
 const noSteps = (): Steps => ({ outputs: 0, lastOutput: 0, count: 0, compacted: false })
 let steps = noSteps()
@@ -215,33 +195,46 @@ export const register: Register = (on, options) => {
   configure(options ?? {})
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    activeSessionId = await $.session.id().catch(() => undefined)
+    await restoreCache($)
     timer?.cancel()
     let tick = 0
+    let polling = false
     timer = $.clock.every(1000, () => {
       tick++
-      $.clock
+      return $.clock
         .now()
         .then(async now => {
-          // a subagent can outlive the turn that started it: counted every other second, a turn or not
-          if (tick % 2 === 0) {
-            const running = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running')
-            const ids = (list: readonly { id: string }[]) => list.map(a => a.id).join()
-            if (ids(running) !== ids(snap.agents ?? [])) {
-              const since = (id: string) => snap.agents?.find(a => a.id === id)?.since ?? now // first seen, within 2 seconds
-              snap = { ...snap, agents: running.map(a => ({ id: a.id, type: a.type, description: a.description, since: since(a.id) })) }
-              $.ui.invalidate('ui.render')
-            }
-          }
-          // while Claude works the context grows request by request and result by result: read it again
-          if (work && tick % REFRESH_TICKS === 0) await readContext($, false).catch(() => {})
-          if (work || shouldRedraw(snap, now)) $.ui.invalidate('ui.render')
+          // Redraw from wall time every second, also after a hidden surface returns. Slow usage/agent
+          // reads must not hold up this clock or accumulate another background poll on every tick.
+          $.ui.invalidate('ui.render')
           writeFooter($, now)
           suggestKeep($, now)
           alert($, now)
+          if (polling) return
+          polling = true
+          try {
+            // a subagent can outlive the turn that started it: counted every other second, a turn or not
+            if (tick % 2 === 0) {
+              const running = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running')
+              const ids = (list: readonly { id: string }[]) => list.map(a => a.id).join()
+              if (ids(running) !== ids(snap.agents ?? [])) {
+                const since = (id: string) => snap.agents?.find(a => a.id === id)?.since ?? now // first seen, within 2 seconds
+                snap = { ...snap, agents: running.map(a => ({ id: a.id, type: a.type, description: a.description, since: since(a.id) })) }
+                $.ui.invalidate('ui.render')
+              }
+            }
+            // while Claude works the context grows request by request and result by result: read it again
+            if (work && tick % REFRESH_TICKS === 0) await readContext($, false).catch(() => {})
+          } finally {
+            polling = false
+          }
         })
         .catch(() => {})
     })
     const usage = await $.session.usage().catch(() => null)
+    costSeen = usage?.cost?.usd ?? 0
+    await restoreToday($)
     if (usage) takeLimits(usage.rateLimits, usage.cost?.usd, await $.clock.now())
     const model = await $.session.model().catch(() => '')
     if (model && !snap.model) snap = { ...snap, model }
@@ -254,7 +247,11 @@ export const register: Register = (on, options) => {
   on('session.measure', async ($, e, next) => {
     const result = await next(e)
     takeLimits(e.rateLimits, e.cost?.usd, await $.clock.now())
-    if (e.cost) mine = { ...mine, usd: e.cost.usd }
+    await rollToday($)
+    if (e.cost) {
+      mine = { ...mine, usd: mine.usd + Math.max(0, e.cost.usd - costSeen) }
+      costSeen = e.cost.usd
+    }
     $.ui.invalidate('ui.render')
     return result
   })
@@ -275,10 +272,13 @@ export const register: Register = (on, options) => {
   // Each model request: the cache clock restarts on the main thread; tokens count for today and the hit rate,
   // and the main thread's input and output are kept for k. An omitted effort is no change, for the same model.
   on('turn.step', async function* ($, e, next) {
+    const requestedAt = !e.agentId ? await $.clock.now() : undefined
+    const sessionId = activeSessionId
     if (!e.agentId) snap = { ...snap, model: e.model, effort: e.effort ?? (e.model === snap.model ? snap.effort : undefined) }
     const result = yield* next(e)
     const u = result.usage
     if (u) {
+      await rollToday($)
       const input = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
       const output = u.output_tokens ?? 0
       mine = { ...mine, input: mine.input + input, output: mine.output + output }
@@ -287,14 +287,30 @@ export const register: Register = (on, options) => {
         steps = { ...steps, first: steps.first ?? input, last: input, outputs: steps.outputs + output, lastOutput: output, count: steps.count + 1 }
       }
     }
-    if (!e.agentId && result.stopReason !== null) {
-      const now = await $.clock.now() // before the spread, so an update during the await is kept
-      snap = { ...snap, lastRequestAt: now }
-      $.ui.invalidate('ui.render')
+    if (!e.agentId && result.stopReason !== null && sessionId === activeSessionId) {
+      // The cache is used by the request, not when a long response finishes streaming.
+      if (u && (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) > 0)
+        await recordCache($, requestedAt!, sessionId)
       if (work) void readContext($, false).catch(() => {}) // each request's usage, not only the turn's end
     }
     return result
   })
+
+  // /keepwarm and other window forks also refresh this conversation's cached prefix.
+  on('model.fork', async ($, e, next) => {
+    const requestedAt = await $.clock.now()
+    const sessionId = activeSessionId
+    const result = await next(e)
+    if (result.value?.isAnswered && sessionId === activeSessionId) {
+      const u = result.value.usage
+      if ((u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) > 0)
+        await recordCache($, requestedAt, sessionId)
+      await rollToday($)
+      mine = { ...mine, input: mine.input + (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0), output: mine.output + (u.output_tokens ?? 0) }
+      snap = { ...snap, cache: hitRate(snap.cache, u) }
+    }
+    return result
+  }).catch(async ($, e, next) => next(e)) // observer only: never blocks a background refresh
 
   // Counts every tool call of the turn; sizes the main thread's results for the largest-items line and
   // watches them for re-reads, repeats and oversized outputs.
@@ -343,6 +359,7 @@ export const register: Register = (on, options) => {
       steps = { ...steps, compacted: true }
       const compaction = { before: result.tokensBefore, after: result.tokensAfter, lost: lostFiles([...edited], result.messages), count: (snap.compaction?.count ?? 0) + 1 }
       snap = { ...snap, tokens: result.tokensAfter ?? snap.tokens, compaction }
+      await clearCache($)
       $.ui.invalidate('ui.render')
       // until the engine takes the result, usage still reports the request before the compaction: read it after
       $.clock.after(2000, () => void readContext($, false).catch(() => {}))
@@ -354,6 +371,7 @@ export const register: Register = (on, options) => {
   on('classic.PostModelSwitch', async ($, e, next) => {
     const result = await next(e)
     snap = { ...snap, model: e.to_model, effort: undefined }
+    await clearCache($)
     $.ui.invalidate('ui.render')
     return result
   })
@@ -394,8 +412,40 @@ export const register: Register = (on, options) => {
     if (e.reason === 'clear' || e.reason === 'resume') {
       snap = { ...empty(), limits: snap.limits, costUsd: snap.costUsd, today: snap.today, model: snap.model, effort: snap.effort }
       forget()
+      activeSessionId = undefined
+      work = undefined
+      turnItems = []
+      turnCard = false
+      keepOfferedFor = undefined
+      mine = { usd: 0, input: 0, output: 0 }
+      mineDate = ''
+      costSeen = 0
     }
     return next(e)
+  })
+
+  // /clear and /resume reuse the process without another session.start. Resume the saved
+  // timestamp of the selected conversation instead of restarting a full cache lifetime.
+  on('classic.SessionStart', async ($, e, next) => {
+    const result = await next(e)
+    activeSessionId = e.session_id
+    await restoreCache($)
+    if (snap.lastRequestAt === undefined && typeof e.seconds_since_last_response === 'number' && e.seconds_since_last_response >= 0)
+      await recordCache($, await $.clock.now() - e.seconds_since_last_response * 1000, activeSessionId)
+    const usage = await $.session.usage().catch(() => null)
+    costSeen = usage?.cost?.usd ?? 0
+    await restoreToday($)
+    if (usage) takeLimits(usage.rateLimits, usage.cost?.usd, await $.clock.now())
+    await readContext($, false).catch(() => {})
+    $.ui.invalidate('ui.render')
+    return result
+  })
+
+  on('turn.abort', async ($, e, next) => {
+    const result = await next(e)
+    work = undefined
+    $.ui.invalidate('ui.render')
+    return result
   })
 
   // The band above the prompt.
@@ -423,6 +473,37 @@ export const register: Register = (on, options) => {
   }).catch(async ($, e, next) => next(e)) // never in the way of a question
 }
 
+async function restoreCache($: EngineInterface) {
+  const at = activeSessionId ? await $.store.get(`${CACHE_KEY}${activeSessionId}`).catch(() => undefined) : undefined
+  snap = { ...snap, lastRequestAt: typeof at === 'number' && Number.isFinite(at) ? at : undefined }
+}
+
+async function recordCache($: EngineInterface, requestedAt: number, sessionId: string | undefined) {
+  if (sessionId !== activeSessionId) return
+  const at = Math.max(snap.lastRequestAt ?? 0, requestedAt)
+  snap = { ...snap, lastRequestAt: at }
+  $.ui.invalidate('ui.render')
+  if (sessionId) await $.store.set(`${CACHE_KEY}${sessionId}`, at).catch(() => {})
+}
+
+async function clearCache($: EngineInterface) {
+  snap = { ...snap, lastRequestAt: undefined }
+  if (activeSessionId) await $.store.delete(`${CACHE_KEY}${activeSessionId}`).catch(() => {})
+}
+
+async function restoreToday($: EngineInterface) {
+  mineDate = dateKey(await $.clock.now())
+  const saved = activeSessionId ? await $.store.get(`${DAY_PREFIX}${mineDate}:${activeSessionId}`).catch(() => undefined) : undefined
+  mine = sumDays(saved && typeof saved === 'object' ? [saved as Day] : [])
+}
+
+async function rollToday($: EngineInterface) {
+  const today = dateKey(await $.clock.now())
+  if (today === mineDate) return
+  if (mineDate && activeSessionId) await $.store.set(`${DAY_PREFIX}${mineDate}:${activeSessionId}`, mine).catch(() => {})
+  await restoreToday($)
+}
+
 // The chip row (and the detail panel when open) for one site; undefined with nothing to show yet.
 async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, columns: number, state: 'idle' | 'working' | 'question', isYielding: boolean) {
   const now = await $.clock.now()
@@ -437,22 +518,12 @@ async function bandTree($: EngineInterface, ui: unknown, textBars: boolean, colu
 function actions($: EngineInterface): Actions {
   return {
     keepWarm: () => void askKeep($).catch(() => {}),
-    compact: () => fillPrompt($, `/compact ${compactArgs([...edited])}`.trim()),
-    handoff: () => fillPrompt($, handoffText(cfg.handoffDir, snap.compaction?.lost)),
     toggle: () => {
       showDetail = !showDetail
       if (showDetail) void readToday($).then(() => $.ui.invalidate('ui.render')).catch(() => {})
       $.ui.invalidate('ui.render')
     },
   }
-}
-
-// A clean-up button only writes its request into the prompt box: the person sends it, edits it or clears it.
-function fillPrompt($: EngineInterface, text: string) {
-  $.prompt
-    .fill({ text, mode: 'replace' })
-    .then(r => r.isFilled || $.ui.toast('입력창에 넣지 못했습니다'))
-    .catch(() => $.ui.toast('입력창에 넣지 못했습니다'))
 }
 
 function takeLimits(rateLimits: readonly Limit[] | undefined, costUsd: number | undefined, now: number) {
@@ -491,8 +562,8 @@ async function readContext($: EngineInterface, isTurn: boolean) {
 
 // Today's figures, one store key per session so sessions never overwrite each other.
 async function saveToday($: EngineInterface) {
-  const now = await $.clock.now()
-  await $.store.set(`${DAY_PREFIX}${dateKey(now)}:${await $.session.id()}`, mine)
+  await rollToday($)
+  await $.store.set(`${DAY_PREFIX}${mineDate}:${activeSessionId ?? await $.session.id()}`, mine)
   await readToday($)
 }
 
@@ -511,7 +582,8 @@ async function readToday($: EngineInterface) {
 }
 
 export function sumDays(days: Day[]): Day {
-  return days.reduce((a, d) => ({ usd: a.usd + (d.usd || 0), input: a.input + (d.input || 0), output: a.output + (d.output || 0) }), { usd: 0, input: 0, output: 0 })
+  const count = (n: number) => Number.isFinite(n) && n >= 0 ? n : 0
+  return days.reduce((a, d) => ({ usd: a.usd + count(d.usd), input: a.input + count(d.input), output: a.output + count(d.output) }), { usd: 0, input: 0, output: 0 })
 }
 
 // Once a day across sessions: one GET of the marketplace file, a toast when it lists a newer version. Nothing is sent.
@@ -784,11 +856,7 @@ export function view(s: Snapshot, now: number, canKeep: boolean): View {
       bar: { percent: (s.tokens / s.window) * 100, color: f.color },
       delta: last ? (last > 0 ? `▲${short(last)}` : `▼${short(-last)}`) : undefined,
       turns: left === undefined ? undefined : `≈ ${left > 999 ? '999+' : left}턴`,
-      offerActions: level >= cfg.actionsAt,
     }
-    const isCold = s.lastRequestAt !== undefined && now >= s.lastRequestAt + cfg.cacheTtlMs
-    const memo = cfg.showCost ? memoUsd(s.model, s.tokens, isCold, cfg.cacheTtlMs) : undefined
-    if (memo !== undefined) v.ctx.memoUsd = memo.toFixed(2)
     v.slices = slices(s.slices, s.window)
     if (s.compactsAt) {
       const growth = average(s.deltas)
@@ -875,8 +943,6 @@ const PRICES: [RegExp, number, number][] = [
   [/haiku-5/i, 0.1, 0.01],
   [/haiku-4-5/i, 1, 0.1],
 ]
-const OUTPUT_X = 5
-const MEMO_OUTPUT = 3_000 // shortcut: a memo's output, thinking included, is a guess; measure one memo turn's usage if it matters
 
 // Input and cache-read prices per million tokens for a prompt of `tokens`; undefined for a model the table does not know.
 export function prices(model: string | undefined, tokens: number) {
@@ -897,13 +963,6 @@ export function rewriteUsd(model: string | undefined, tokens: number, ttlMs: num
 export function savedUsd(model: string | undefined, readTokens: number) {
   const p = prices(model, 0)
   return p && (readTokens / 1e6) * (p.input - p.read)
-}
-
-// What the handoff memo costs: one request over the context, read from the cache or written again if it went cold,
-// and the memo it writes.
-export function memoUsd(model: string | undefined, tokens: number, isCold: boolean, ttlMs: number) {
-  const p = prices(model, tokens)
-  return p && (isCold ? rewriteUsd(model, tokens, ttlMs)! : (tokens / 1e6) * p.read) + (MEMO_OUTPUT / 1e6) * p.input * OUTPUT_X
 }
 
 // Drops the extras, then the model chip, then the cost, then 7d, until the line fits.
@@ -1001,29 +1060,17 @@ function workCells(w: Work & { elapsed: number }) {
   return cells(`⏳ ${mmss(w.elapsed)} · 도구 ${w.tools}`) + 3
 }
 
-// The clean-up buttons; the memo says what it costs.
-function actionLabels(v: View) {
-  return { compact: '/compact', handoff: `인계 메모${v.ctx?.memoUsd ? ` ≈$${v.ctx.memoUsd}` : ''}` }
-}
-
 function width(v: View) {
   // the bars between chips for text's brackets, padding, the bars drawn wider than their two glyphs, the ▾ button
-  // and the clean-up buttons with their gaps
-  const a = actionLabels(v)
-  return cells(text(v)) + 16 + (v.ctx?.offerActions ? cells(a.compact) + cells(a.handoff) + 4 : 0)
+  return cells(text(v)) + 16
 }
 
-type Actions = { keepWarm: () => void; compact: () => void; handoff: () => void; toggle: () => void }
+type Actions = { keepWarm: () => void; toggle: () => void }
 
 function draw(ui: any, v: View, isTerminal: boolean, act: Actions, working: (Work & { elapsed: number }) | undefined, isYielding: boolean) {
   const { Box, Text, Button } = ui
   const keep = v.cache?.offerKeep && !isYielding ? <Button key="token-gauge-keep" label="캐시 유지" onPress={act.keepWarm} /> : undefined
   const row = chipRow(ui, v, isTerminal, keep, working)
-  if (v.ctx?.offerActions && !working && !isYielding) {
-    const a = actionLabels(v)
-    row.push(<Button key="token-gauge-compact" label={a.compact} onPress={act.compact} />)
-    row.push(<Button key="token-gauge-handoff" label={a.handoff} onPress={act.handoff} />)
-  }
   if (!isYielding) row.push(<Button key="token-gauge-more" label={showDetail ? '▴ 접기' : '▾ 상세'} hotkey="d" plain dimColor onPress={act.toggle} />)
 
   const rows: unknown[] = [
@@ -1472,16 +1519,6 @@ export function recentForecast(list: readonly Reading[], now: number, resetMs: n
   const fullAt = last.at + (100 - last.percent) / rate
   if (fullAt < resetMs) return ` · 최근 1시간 속도면 ${clock(fullAt)}에 100%`
   return ` · 최근 1시간 속도면 리셋 때 ~${Math.round(last.percent + rate * (resetMs - last.at))}%`
-}
-
-// Redraws each minute for the reset countdown, and for the cache every 15 s, every second in its last two minutes.
-function shouldRedraw(s: Snapshot, now: number) {
-  const sec = Math.floor(now / 1000)
-  if (sec % 60 === 0) return true
-  if (s.lastRequestAt === undefined) return false
-  const left = s.lastRequestAt + cfg.cacheTtlMs - now
-  if (left <= -1000) return false // already drawn cold
-  return left <= FAST_BELOW_MS || sec % 15 === 0
 }
 
 export function levelColor(percent: number) {

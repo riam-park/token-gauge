@@ -1,7 +1,11 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { advice, calibrate, cardText, compactArgs, configure, keepChoices, keepPings, droppedBy, estimate, fit, fnv, footerLine, forecastText, handoffText, keepSuggestionDue, hitRate, isNewer, itemLabel, keepwarmHold, koDuration, largest, latestVersion, lostFiles, memoUsd, modelName, pace, pdfPages, readKind, recentForecast, redact, rewriteUsd, savedUsd, slices, stackCells, sumDays, svgBar, text, toolKey, trail, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
+import { advice, calibrate, cardText, configure, keepChoices, keepPings, droppedBy, estimate, fit, fnv, footerLine, forecastText, keepSuggestionDue, hitRate, isNewer, itemLabel, keepwarmHold, koDuration, largest, latestVersion, lostFiles, modelName, pace, pdfPages, readKind, recentForecast, redact, rewriteUsd, savedUsd, slices, stackCells, sumDays, svgBar, text, toolKey, trail, turnSample, turnsLeft, unusedServers, view } from '../hooks/register'
 import type { Snapshot } from '../hooks/register'
+
+// The test runner supplies native timers; production hooks use $.clock instead.
+declare const setTimeout: (callback: () => void, delay: number) => unknown
+import { dateKey, register } from '../hooks/register'
 
 const NOW = Date.parse('2026-10-22T00:00:00Z')
 const MIN = 60_000
@@ -39,10 +43,99 @@ function engine(on: any) {
 const QUESTION = { tool: 'AskUserQuestion', questions: [{ question: '어느 쪽?', header: '선택', multiSelect: false, options: [{ label: 'A', description: 'a' }, { label: 'B', description: 'b' }] }] }
 
 describe('token-gauge', () => {
+  for (const rollover of [false, true]) {
+    test(`today restores saved counters and counts only new cost${rollover ? ' across midnight' : ''}`, async ($: any, on: any) => {
+      const start = new Date(2026, 10, 14, 23, 59, 59).getTime()
+      const clock = mock.clock(on, { now: start })
+      mock.store(on, { [`day:${dateKey(start)}:s`]: { usd: 2, input: 100, output: 20 } })
+      on('session.id', () => ({ value: 's' }))
+      on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
+      on('session.usage', () => ({ value: { context: { tokens: 100_000, window: 1_000_000 }, cost: { usd: 10 }, rateLimits: [] } }))
+      on('session.measure', () => ({ changed: ['cost'] }))
+      on('turn.complete', () => ({ text: '' }))
+      on('command.list', () => ({ value: [] }))
+      on('ui.render', ($$: any, e: any) => $$.ui.resolve(e).Text({ children: 'engine band' }))
+      await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
+      if (rollover) await clock.advance(2000)
+      await $.session.measure({ cost: { usd: 11 } })
+      await $.turn.complete({ answer: '', durationMs: 0, isAborted: false, turnId: 't', reason: 'answer' })
+      const ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 200 } })
+      await ui.press({ key: 'token-gauge-more' })
+      expect(await ui.find({ type: 'Text', text: rollover ? '$1.00 · 세션 1개 · 입력 0 / 출력 0' : '$3.00 · 세션 1개 · 입력 100 / 출력 20' })).toBeDefined()
+      await ui.unmount()
+    })
+  }
+
+  for (const surface of ['desktop', 'terminal'] as const) {
+    test(`cache counts down every second and catches up after remount (${surface})`, async ($: any, on: any) => {
+      const clock = mock.clock(on, { now: NOW + 123 })
+      mock.store(on, { 'cache-request:s': NOW })
+      on('session.id', () => ({ value: 's' }))
+      on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+      on('session.usage', () => ({ value: { context: { tokens: 100_000, window: 1_000_000 }, rateLimits: [] } }))
+      on('agent.list', () => ({ value: [] }))
+      on('ui.render', ($$: any, e: any) => $$.ui.resolve(e).Text({ children: 'engine band' }))
+      await $.session.start({ surface, isInteractive: false, cwd: '/w' })
+      const mount = () => $.ui.mount({ plugin: 'token-gauge', surface, component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 200 } })
+      let ui = await mount()
+      expect((await ui.findAll({ type: 'Text' })).map((t: any) => t.text)).toContain('60:00')
+      await clock.advance(1000)
+      expect((await ui.findAll({ type: 'Text' })).map((t: any) => t.text)).toContain('59:59')
+      await ui.unmount()
+      await clock.advance(31_000)
+      ui = await mount()
+      expect((await ui.findAll({ type: 'Text' })).map((t: any) => t.text)).toContain('59:28')
+      await clock.advance(1000)
+      expect((await ui.findAll({ type: 'Text' })).map((t: any) => t.text)).toContain('59:27')
+      await ui.unmount()
+    })
+  }
+
+  test('cache time starts at the request, not at the end of a long response', async ($: any, on: any) => {
+    const clock = mock.clock(on, { now: NOW })
+    mock.store(on)
+    on('session.id', () => ({ value: 's' }))
+    let finish!: () => void
+    const response = new Promise<void>(resolve => { finish = resolve })
+    on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+    on('session.usage', () => ({ value: { context: { tokens: 100_000, window: 1_000_000 }, rateLimits: [] } }))
+    on('ui.render', ($$: any, e: any) => $$.ui.resolve(e).Text({ children: 'engine band' }))
+    on('turn.step', async function* (engine$: any, e: any) {
+      await response
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: { cache_read_input_tokens: 100_000 } }
+    })
+    await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
+    const pending = $.turn.step({ turnId: 't', index: 0, model: 'claude-opus-5-5', messageCount: 1 }).next()
+    await clock.settle()
+    await clock.advance(5000)
+    finish()
+    await pending
+    const ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 200 } })
+    expect(await ui.find({ type: 'Text', text: '59:55' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('resume restores that conversation cache without resetting its age', async ($: any, on: any) => {
+    mock.clock(on, { now: NOW })
+    mock.store(on, { 'cache-request:s': NOW - 54 * MIN, 'cache-request:other': NOW - 20 * MIN })
+    on('session.id', () => ({ value: 's' }))
+    on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
+    on('session.end', (_$: any, e: any) => ({ sessionId: e.sessionId }))
+    on('classic.SessionStart', () => ({}))
+    on('session.usage', () => ({ value: { context: { tokens: 100_000, window: 1_000_000 }, rateLimits: [] } }))
+    on('ui.render', ($$: any, e: any) => $$.ui.resolve(e).Text({ children: 'engine band' }))
+    await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
+    await $.session.end({ reason: 'resume', sessionId: 's' })
+    await $.classic.SessionStart({ session_id: 'other', source: 'resume', cwd: '/w', transcript_path: '', permission_mode: 'default' })
+    const ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 200 } })
+    expect(await ui.find({ type: 'Text', text: '40:00' })).toBeDefined()
+    await ui.unmount()
+  })
+
   test('calm: three chips, forecast clear, cache blue', () => {
     const v = view(calm, NOW, true)
     expect(text(v)).toBe('[plan 5h 5% ▰▱ ↻2h52 · 7d 38% ↻3d0h · $1.27]  [☀ context ▰▱ 113k / 1M 11% · ▲1.3k · ≈ 675턴]  [❄ 59:06]')
-    expect(v.ctx).toMatchObject({ color: '#6CC88A', offerActions: false })
+    expect(v.ctx).toMatchObject({ color: '#6CC88A' })
     expect(v.cache?.offerKeep).toBe(false)
     expect(Math.round((v.plan?.five?.bar.marker ?? 0) * 10)).toBe(427) // 2h08 of 5h gone
   })
@@ -60,16 +153,15 @@ describe('token-gauge', () => {
   test('warning: violet forecast, keep button under 10 minutes', () => {
     const s: Snapshot = { ...calm, tokens: 660_000, deltas: [24_000], lastRequestAt: NOW - 52 * MIN }
     const v = view(s, NOW, true)
-    expect(v.ctx).toMatchObject({ icon: '☂', offerActions: false }) // 68% of the compact line
-    expect(view({ ...s, tokens: 680_000 }, NOW, true).ctx).toMatchObject({ offerActions: true }) // 70%
+    expect(v.ctx).toMatchObject({ icon: '☂' }) // 68% of the compact line
     expect(v.cache).toMatchObject({ text: '8:00', offerKeep: true, color: '#E8C547' })
     expect(view(s, NOW, false).cache?.offerKeep).toBe(false) // no cache-tax, no button
   })
 
-  test('danger: compact soon with buttons, cache cold with the rewrite size', () => {
+  test('danger: compact soon, cache cold with the rewrite size', () => {
     const s: Snapshot = { ...calm, tokens: 905_000, deltas: [20_000], lastRequestAt: NOW - 2 * 60 * MIN }
     const v = view(s, NOW, true)
-    expect(v.ctx).toMatchObject({ icon: '↯', offerActions: true })
+    expect(v.ctx).toMatchObject({ icon: '↯' })
     expect(v.cache).toMatchObject({ text: 'cold', isCold: true, rewrite: '재기록 ~905k', offerKeep: false })
   })
 
@@ -120,16 +212,13 @@ describe('token-gauge', () => {
   }
 
   test('install options', () => {
-    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, actionsAt: 70, showCost: true, alerts: true, handoffDir: '' })
-    expect(configure({ actionsAt: 200, handoffDir: '  ' })).toMatchObject({ actionsAt: 70, handoffDir: '' }) // odd values keep defaults
-    expect(handoffText('')).toContain('파일은 만들지 말고 이 답변에') // no folder: the memo comes as the answer
+    expect(configure({})).toEqual({ cacheTtlMs: 3_600_000, showCost: true, alerts: true })
+    expect(configure({ actionsAt: 200, handoffDir: '  ' })).toEqual({ cacheTtlMs: 3_600_000, showCost: true, alerts: true }) // odd values keep defaults
     configure({ cacheTtl: '5m', actionsAt: 80, showCost: false, handoffDir: 'notes/' })
     const v = view(calm, NOW, true)
     expect(v.cache?.text).toBe('4:06') // 5 minutes from the last request
     expect(v.plan?.cost).toBeUndefined()
     expect(detail(calm, '오늘')).toBe('세션 3개 · 입력 1.9M / 출력 84k')
-    expect(view({ ...calm, tokens: 700_000 }, NOW, true).ctx?.offerActions).toBe(false) // 72% < 80%
-    expect(handoffText('notes')).toContain('`notes` 폴더에 Markdown 파일로') // no file-name pattern: that is the person's own rule
     configure({})
   })
 
@@ -155,7 +244,7 @@ describe('token-gauge', () => {
         shown.push(e.text)
         return { value: undefined }
       })
-      const tick = () => new Promise(r => setTimeout(r, 1))
+      const tick = () => new Promise<void>(r => setTimeout(r, 1))
       for (let n = 1; n <= 2; n++) {
         // the second session the same day makes no request
         await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
@@ -244,8 +333,6 @@ describe('token-gauge', () => {
     expect(detail({ ...calm, compaction: { before: 312_000, after: 41_000, lost } }, 'compact')).toBe('312k → 41k · 요약에 빠진 편집 파일 1개: b.py')
     expect(detail({ ...calm, compaction: { lost: [] } }, 'compact')).toBe('완료')
     expect(detail({ ...calm, compaction: { before: 312_000, after: 41_000, lost: [], count: 2 } }, 'compact')).toBe('2회 · 312k → 41k') // 2026-10-24
-    expect(handoffText('', lost)).toMatch(/compact 요약에 빠진 편집 파일도 메모에 넣어 줘: C:\\w\\b\.py$/)
-    expect(handoffText('')).not.toContain('compact')
   })
 
   test('estimate: text by length, a picture by its 28-pixel patches, a PDF by its pages', () => {
@@ -519,7 +606,7 @@ describe('token-gauge', () => {
       if (sent) expect(r).toEqual({ text: '이어서 해 줘' }) // entered as typed: no drop shown
       else expect(r.drop).toBe('token-gauge: 보내지 않았습니다. 입력창에 되돌렸습니다.') // the card's answer, not the hook's warning
       await clock.advance(1) // /keepwarm waits for a timer past the hook
-      for (let i = 0; i < 50 && sent && toasts.length === 0; i++) await new Promise(res => setTimeout(res, 1))
+      for (let i = 0; i < 50 && sent && toasts.length === 0; i++) await new Promise<void>(res => setTimeout(res, 1))
       expect(asked.length).toBe(1)
       expect(asked[0].questions[0]).toMatchObject({ header: 'token-gauge', question: 'test 플러그인이 이 프롬프트를 막았습니다.\n프롬프트 캐시가 38시간 39분 전에 식어서, 지금 보내면 252,672토큰을 다시 기록합니다: $2.02 (캐시가 살아 있었으면 $0.05)\n유지를 고르면 test가 50분마다 캐시를 갱신합니다(회당 약 $0.05). 보내기만 고르면 유지를 켜지 않습니다.\n그래도 보낼까요? 취소하면 입력창에 되돌립니다. 입력창에서 다시 보내면 test가 비용을 내는 것으로 보고 통과시킵니다.' }) // whose card, and the reason in Korean
       expect(submitted).toEqual(sent ? [`${kind}: 이어서 해 줘`] : []) // the person's own prompt, not a second one of the plugin's
@@ -565,7 +652,7 @@ describe('token-gauge', () => {
     await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/w' })
     await $.prompt.submit({ text: 'a', origin: { kind: 'composer' } })
     await $.prompt.submit({ text: 'b', origin: { kind: 'composer' } })
-    for (let i = 0; i < 50 && toasts.length === 0; i++) await new Promise(res => setTimeout(res, 1))
+    for (let i = 0; i < 50 && toasts.length === 0; i++) await new Promise<void>(res => setTimeout(res, 1))
     expect(toasts.filter(t => t.startsWith('cache-tax가 먼저 실행돼')).length).toBe(1)
   })
 
@@ -584,21 +671,13 @@ describe('token-gauge', () => {
   })
 
   // 2026-10-23: presses during a long turn showed nothing and queued /compact and the memo twice each
-  test('/compact keeps the edited files; the memo button says what it costs', () => {
-    expect(compactArgs([])).toBe('')
-    expect(compactArgs(['C:/w/a.py', 'C:/w/b.py'])).toBe('이번 세션에서 편집한 파일 경로를 요약에 모두 남겨 줘: C:/w/a.py, C:/w/b.py')
-    expect(compactArgs(Array.from({ length: 22 }, (_, i) => `f${i}`))).toMatch(/^.+: f2, .+, f21 외 2개$/) // the latest 20
-    expect(memoUsd('claude-opus-5-5', 800_000, false, 60 * MIN)?.toFixed(2)).toBe('0.22') // 800k read at $0.20 + 3k out at $20
-    expect(memoUsd('claude-opus-5-5', 800_000, true, 60 * MIN)?.toFixed(2)).toBe('6.46') // cold: written again at $8
-    expect(memoUsd('claude-3-opus', 800_000, false, 60 * MIN)).toBeUndefined()
-    const s = { ...calm, tokens: 800_000, lastRequestAt: NOW - 60_000, model: 'claude-opus-5-5' }
-    expect(view(s, NOW, false).ctx?.memoUsd).toBe('0.22')
+  test('unknown models show no price estimate', () => {
     expect(detail({ ...calm, model: 'claude-next-9' }, '비용')).toBe('단가표에 없는 모델(claude-next-9)이라 금액을 보이지 않습니다')
     expect(detail(calm, '비용')).toBeUndefined()
   })
 
   // 2026-10-23: the buttons sent at once; the person now sends, edits or clears what they put in the box
-  test('the clean-up buttons fill the prompt box and send nothing', async ($: any, on: any) => {
+  test('compact and handoff buttons are absent even near the context limit', async ($: any, on: any) => {
     mock.clock(on, { now: NOW })
     const toasts: string[] = []
     const sent: string[] = []
@@ -625,14 +704,12 @@ describe('token-gauge', () => {
     })
     await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' })
     const ui = await $.ui.mount({ plugin: 'token-gauge', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 200 } })
-    await ui.press({ key: 'token-gauge-compact' })
-    await ui.press({ key: 'token-gauge-handoff' })
-    expect(filled).toEqual(['replace: /compact', `replace: ${handoffText('')}`])
+    expect(await ui.find({ type: 'Button', text: '/compact' })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', text: /^인계 메모/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', text: '▾ 상세' })).toBeDefined()
+    expect(filled).toEqual([])
     expect(sent).toEqual([])
-    expect(await ui.find({ type: 'Button', text: '/compact' })).toBeDefined() // no waiting state
-    isFilled = false // a dialog holds the keys
-    await ui.press({ key: 'token-gauge-compact' })
-    expect(toasts).toEqual(['입력창에 넣지 못했습니다'])
+    expect(toasts).toEqual([])
     await ui.unmount()
   })
 
@@ -708,7 +785,7 @@ describe('token-gauge', () => {
   })
 
   const settle = async () => {
-    for (let i = 0; i < 10; i++) await new Promise(res => setTimeout(res, 1))
+    for (let i = 0; i < 10; i++) await new Promise<void>(res => setTimeout(res, 1))
   }
   const LINE = /^☀\uFE0F 11% · 5h 5% · 7d 38%$/
   function footerEngine(on: any) {
@@ -759,5 +836,46 @@ describe('token-gauge', () => {
     expect(keepSuggestionDue(NOW - 40 * MIN, NOW, 60 * MIN, undefined)).toBe(false) // 20 minutes left
     expect(keepSuggestionDue(NOW - 61 * MIN, NOW, 60 * MIN, undefined)).toBe(false) // already cold
     expect(keepSuggestionDue(undefined, NOW, 60 * MIN, undefined)).toBe(false) // no request yet
+  })
+
+  test('background forks refresh cached prefixes and preserve the latest request timestamp', async () => {
+    const hooks: Record<string, any> = {}
+    const on: any = (event: string, ...args: any[]) => {
+      hooks[event] = args.at(-1)
+      return { catch: () => {} }
+    }
+    register(on, { alerts: false })
+    let now = NOW
+    const saved: any[] = []
+    const deleted: string[] = []
+    const $: any = {
+      clock: { now: async () => now },
+      ui: { invalidate: () => {} },
+      session: { usage: async () => ({}) },
+      store: { get: async () => undefined, set: async (...args: any[]) => { saved.push(args) }, delete: async (key: string) => { deleted.push(key) } },
+    }
+    await hooks['classic.SessionStart']($, { session_id: 'fork-test' }, async () => ({}))
+    const reply = { value: { isAnswered: true, text: '', usage: { input_tokens: 0, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 0, output_tokens: 1 } } }
+    await hooks['model.fork']($, {}, async () => reply)
+    expect(saved.at(-1)).toEqual(['cache-request:fork-test', NOW])
+    let finish!: () => void
+    const lateReply = new Promise<any>(resolve => { finish = () => resolve(reply) })
+    const pending = hooks['model.fork']($, {}, () => lateReply)
+    await Promise.resolve()
+    now += 5000
+    await hooks['model.fork']($, {}, async () => reply)
+    finish()
+    await pending
+    expect(saved.at(-1)).toEqual(['cache-request:fork-test', NOW + 5000])
+    await hooks['model.fork']($, {}, async () => ({ value: { isAnswered: false, reason: 'aborted' } }))
+    expect(saved.at(-1)).toEqual(['cache-request:fork-test', NOW + 5000])
+    const writes = saved.length
+    const uncached = hooks['turn.step']($, { model: 'claude-opus-5-5' }, async function* () {
+      return { stopReason: 'end_turn', usage: { input_tokens: 25, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }
+    })
+    await uncached.next()
+    expect(saved.length).toBe(writes)
+    await hooks['classic.PostModelSwitch']($, { to_model: 'claude-sonnet-4-6' }, async () => ({}))
+    expect(deleted).toEqual(['cache-request:fork-test'])
   })
 })

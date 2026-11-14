@@ -1,7 +1,7 @@
 {
   "name": "token-gauge",
-  "version": "1.9.0",
-  "description": "Plan limits, context, the prompt-cache countdown and the model as color-coded chips above the prompt, with a detail panel, token-saving buttons and tips.",
+  "version": "2.0.0",
+  "description": "Plan limits, context, the prompt-cache countdown and the model as color-coded chips above the prompt, with a detail panel, cache controls and tips.",
   "author": {
     "name": "yongmin.park",
     "url": "https://github.com/riam-park"
@@ -13,16 +13,11 @@
       "type": "string",
       "title": "캐시 수명",
       "description": "구독(Pro, Max, Team, Enterprise) 로그인은 1h, API 키나 클라우드 제공자는 5m. 캐시 칩의 남은 시간 계산에 씁니다.",
-      "options": ["1h", "5m"],
+      "options": [
+        "1h",
+        "5m"
+      ],
       "default": "1h"
-    },
-    "actionsAt": {
-      "type": "number",
-      "title": "정리 버튼 기준(%)",
-      "description": "컨텍스트가 자동 compact 기준선의 몇 %가 되면 /compact와 인계 메모 버튼을 보일지. 50~95.",
-      "min": 50,
-      "max": 95,
-      "default": 70
     },
     "showCost": {
       "type": "boolean",
@@ -35,12 +30,6 @@
       "title": "알림",
       "description": "5시간 한도 90%, 컨텍스트 80%, 캐시 만료 임박, 새 버전(하루 한 번 GitHub에서 확인) 알림과 토큰 절약 팁을 띄울지.",
       "default": true
-    },
-    "handoffDir": {
-      "type": "string",
-      "title": "인계 메모 폴더",
-      "description": "비워 두면 인계 메모를 세션 답변으로 받습니다. 저장소 안 폴더(예: .temp)를 적으면 그 폴더에 PROMPT 파일로 쓰라고 요청합니다.",
-      "default": ""
     }
   }
 }
